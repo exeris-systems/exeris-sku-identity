@@ -1,3 +1,12 @@
+---
+title: "exeris-sku-identity — Roadmap"
+type: roadmap
+visibility: public
+owning-repo: exeris-sku-identity
+status: active
+last-verified: 2026-10-15
+---
+
 # exeris-sku-identity — Roadmap
 
 Status: **poc**. Version line: **0.1.x**. Licence: Exeris Commercial License (ADR-023), entitlement id
@@ -12,14 +21,14 @@ Milestones are versions, not dates. Dates appear only on what has shipped; nothi
 
 ## Where this sits
 
-Tier 3 Platform SKU of the Service Boundary family (HLA; ADR-024, ADR-053, ADR-070, ADR-099). A runnable application that boots the kernel HTTP subsystem and provides Identity and Access Management (IAM) on top of `service-boundary-core`. It composes 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
+Tier 3 Platform SKU of the Service Boundary family (HLA; ADR-024, ADR-053, ADR-099). A runnable application that boots the kernel HTTP subsystem and provides Identity and Access Management (IAM) on top of `service-boundary-core`. It composes 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
 
 The implementation coordinates core authentication and authorization flows: user registration and onboarding, Argon2id password authentication, RFC 6238 TOTP multi-factor authentication, session management with refresh token rotation, EdDSA (Ed25519) token issuance with active JWKS publication, federated identity provider integration, and tenant member invitations.
 
 **Upstream constraints this repo does not own:**
 
 | Constraint | Effect here | Owner |
-|---|---|---|
+| --- | --- | --- |
 | Kernel licence gate (ADR-088, ADR-089) in kernel `0.13.0-SNAPSHOT` | Artefacts stay `0.1.0-SNAPSHOT` until kernel `0.13.0` is released | `exeris-kernel` |
 | Each cap's own 0.1.0 / 0.2.0 milestones | The SKU consumes `[0.1.0,0.2.0)` ranges of composed capabilities | capability repositories |
 | Kernel `HttpExchange` integration | Ingress dispatch on the kernel HTTP engine | `exeris-kernel` |

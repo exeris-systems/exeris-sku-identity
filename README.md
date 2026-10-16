@@ -15,6 +15,7 @@ Status: proof of concept (`poc`), version line 0.1.x, built against `exeris-kern
 ## What the source contains
 
 Code arrives in one import pull request. The incoming implementation provides:
+
 - Identity and Access Management (IAM) workflows exposed through `service-boundary-core` directly on the Exeris kernel HTTP subsystem.
 - User onboarding, account verification, credential recovery, and member invitations.
 - Password authentication with Argon2id.
@@ -49,7 +50,6 @@ Where they disagree, the ADRs below and the HLA outrank this README.
 - [ADR-023](https://github.com/exeris-systems/exeris-docs/blob/main/adr/ADR-023-capability-licensing-taxonomy.md) — capability licensing taxonomy.
 - [ADR-024](https://github.com/exeris-systems/exeris-docs/blob/main/adr/ADR-024-capability-composition-model.md) — capability composition model.
 - [ADR-053](https://github.com/exeris-systems/exeris-docs/blob/main/adr/ADR-053-sku-composition-manifest-format.md) — composition manifest format.
-- [ADR-070](https://github.com/exeris-systems/exeris-docs/blob/main/adr/ADR-070-service-boundary-substrate-composition.md) — Service Boundary substrate composition.
 - [ADR-099](https://github.com/exeris-systems/exeris-docs/blob/main/adr/ADR-099-compose-identity-as-a-tier-3-platform-sku.md) — Compose Identity as a Tier 3 Platform SKU.
 
 Registry: [`adr-index.md`](https://github.com/exeris-systems/exeris-docs/blob/main/adr-index.md).

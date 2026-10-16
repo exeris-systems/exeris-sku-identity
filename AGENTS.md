@@ -32,7 +32,7 @@ Operating contract for AI agents working in this repository.
 - [`README.md`](README.md) — what the SKU composes, build prerequisites, licence.
 - [SKU conventions](https://github.com/exeris-systems/exeris-docs/blob/main/standards/sku-conventions.md).
 - [High-Level Architecture](https://github.com/exeris-systems/exeris-docs/blob/main/high-level-architecture.md).
-- ADRs: ADR-006, ADR-023, ADR-024, ADR-053, ADR-070, ADR-089, ADR-099 —
+- ADRs: ADR-006, ADR-023, ADR-024, ADR-053, ADR-089, ADR-099 —
   indexed in [`adr-index.md`](https://github.com/exeris-systems/exeris-docs/blob/main/adr-index.md).
 
 ## 4. `.agents/` discovery
