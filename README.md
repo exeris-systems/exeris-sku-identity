@@ -15,6 +15,7 @@ Status: proof of concept (`poc`), version line 0.1.x, built against `exeris-kern
 ## What the source contains
 
 Code arrives in one import pull request. The incoming implementation provides:
+
 - Identity and Access Management (IAM) workflows exposed through `service-boundary-core` directly on the Exeris kernel HTTP subsystem.
 - User onboarding, account verification, credential recovery, and member invitations.
 - Password authentication with Argon2id.

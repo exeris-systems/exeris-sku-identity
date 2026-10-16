@@ -28,7 +28,7 @@ The implementation coordinates core authentication and authorization flows: user
 **Upstream constraints this repo does not own:**
 
 | Constraint | Effect here | Owner |
-|---|---|---|
+| --- | --- | --- |
 | Kernel licence gate (ADR-088, ADR-089) in kernel `0.13.0-SNAPSHOT` | Artefacts stay `0.1.0-SNAPSHOT` until kernel `0.13.0` is released | `exeris-kernel` |
 | Each cap's own 0.1.0 / 0.2.0 milestones | The SKU consumes `[0.1.0,0.2.0)` ranges of composed capabilities | capability repositories |
 | Kernel `HttpExchange` integration | Ingress dispatch on the kernel HTTP engine | `exeris-kernel` |
