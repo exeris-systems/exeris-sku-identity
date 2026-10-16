@@ -21,7 +21,7 @@ Milestones are versions, not dates. Dates appear only on what has shipped; nothi
 
 ## Where this sits
 
-Tier 3 Platform SKU of the Service Boundary family (HLA; ADR-024, ADR-053, ADR-070, ADR-099). A runnable application that boots the kernel HTTP subsystem and provides Identity and Access Management (IAM) on top of `service-boundary-core`. It composes 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
+Tier 3 Platform SKU of the Service Boundary family (HLA; ADR-024, ADR-053, ADR-099). A runnable application that boots the kernel HTTP subsystem and provides Identity and Access Management (IAM) on top of `service-boundary-core`. It composes 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
 
 The implementation coordinates core authentication and authorization flows: user registration and onboarding, Argon2id password authentication, RFC 6238 TOTP multi-factor authentication, session management with refresh token rotation, EdDSA (Ed25519) token issuance with active JWKS publication, federated identity provider integration, and tenant member invitations.
 
