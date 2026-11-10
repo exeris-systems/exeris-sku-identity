@@ -90,6 +90,17 @@ class TokenIssuanceIT {
     }
 
     @Test
+    @DisplayName("a platform role granted by the directory is never put in a token")
+    void platformRoleIsNotIssued() {
+        Account account = service.member(UUID.randomUUID(), "platform-admin");
+
+        JsonNode claims = part(service.accessToken(account), 1);
+
+        assertThat(claims.has("tid")).isFalse();
+        assertThat(claims.toString()).doesNotContain("platform-admin");
+    }
+
+    @Test
     @DisplayName("a token that was tampered with is refused")
     void tamperedTokenIsRefused() {
         String token = service.accessToken(service.account());

@@ -81,4 +81,25 @@ class SessionTokenIssuerAdapterTest {
         assertThat(issued.get().roles()).isEmpty();
         assertThat(issued.get().customClaims()).doesNotContainKey("scope");
     }
+
+    @Test
+    @DisplayName("the platform role is never issued: it counts toward neither the tenant nor the roles")
+    void platformRoleIsNeverIssued() {
+        UUID tenant = UUID.randomUUID();
+        directory.grant(tenant, subject, "platform-admin");
+
+        adapter.issueAccessToken(subject, session);
+
+        assertThat(issued.get().tenantId()).isNull();
+        assertThat(issued.get().roles()).isEmpty();
+        assertThat(issued.get().customClaims()).doesNotContainKey("scope");
+
+        UUID first = UUID.randomUUID();
+        directory.grant(first, subject, "member");
+
+        adapter.issueAccessToken(subject, session);
+
+        assertThat(issued.get().tenantId()).isEqualTo(first.toString());
+        assertThat(issued.get().roles()).containsExactly("member");
+    }
 }

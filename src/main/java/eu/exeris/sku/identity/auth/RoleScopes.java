@@ -19,6 +19,9 @@ public final class RoleScopes {
     /** Role that administers a tenant. */
     public static final String ADMIN = "admin";
 
+    /** The role of the host's own operators; it is never granted or issued by this service. */
+    public static final String PLATFORM_ADMIN = "platform-admin";
+
     private RoleScopes() {
     }
 
@@ -43,9 +46,19 @@ public final class RoleScopes {
     }
 
     /**
+     * Whether a token may carry the role. The platform role belongs to the host and is never issued.
+     *
+     * @param role a tenant role
+     * @return false for {@link #PLATFORM_ADMIN}
+     */
+    public static boolean issuable(String role) {
+        return !PLATFORM_ADMIN.equals(role);
+    }
+
+    /**
      * The membership a token is issued for.
      *
-     * @param memberships every membership of the subject
+     * @param memberships the memberships of the subject that a token may carry
      * @return the only membership; empty when the subject has none or several
      */
     public static Optional<Membership> activeMembership(List<Membership> memberships) {

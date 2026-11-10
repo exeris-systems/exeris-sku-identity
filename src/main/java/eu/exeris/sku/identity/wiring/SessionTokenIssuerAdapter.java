@@ -18,6 +18,9 @@ import java.util.UUID;
  * Issues the access tokens the session store hands out, naming the tenant, role and scopes the
  * membership directory gives the subject.
  *
+ * <p>A membership in the platform role counts toward neither the tenant nor the roles: that role is never
+ * issued, so a subject whose only membership is the platform role gets a token that names no tenant.
+ *
  * <p>The same rule applies at login and at refresh, so a token's tenant never changes between the two. See
  * {@link RoleScopes#activeMembership} for how the tenant is chosen.
  */
@@ -44,7 +47,8 @@ public final class SessionTokenIssuerAdapter implements AccessTokenIssuer {
         TokenIssueRequest.Builder request = TokenIssueRequest.builder()
                 .subjectId(subjectId)
                 .sessionId(sessionId);
-        Optional<Membership> active = RoleScopes.activeMembership(directory.memberships(subjectId));
+        Optional<Membership> active = RoleScopes.activeMembership(
+                directory.memberships(subjectId).stream().filter(m -> RoleScopes.issuable(m.role())).toList());
         if (active.isPresent()) {
             Membership membership = active.get();
             request.tenantId(membership.tenantId().toString()).roles(Set.of(membership.role()));
