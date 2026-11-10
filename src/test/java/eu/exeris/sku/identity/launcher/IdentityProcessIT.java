@@ -331,6 +331,28 @@ class IdentityProcessIT {
     }
 
     @Test
+    @Order(10)
+    @DisplayName("A kernel-encoded body arrives with one Content-Length that counts its bytes and one JSON Content-Type")
+    void kernelEncodedBody() throws Exception {
+        HttpResponse<byte[]> health = CLIENT.send(to("/health").GET().timeout(Duration.ofSeconds(10)).build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> refused = CLIENT.send(to("/api/v1/auth/login").header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"email\":\"zażółć@example.test\",\"password\":\"x\"}"))
+                .timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofByteArray());
+
+        for (HttpResponse<byte[]> response : List.of(health, refused)) {
+            assertThat(response.body()).isNotEmpty();
+            assertThat(response.headers().allValues("Content-Length"))
+                    .containsExactly(String.valueOf(response.body().length));
+            assertThat(response.headers().allValues("Content-Type")).hasSize(1);
+            assertThat(response.headers().firstValue("Content-Type").orElseThrow()).startsWith("application/json");
+            assertThat(response.headers().allValues("Cache-Control")).containsExactly("no-store");
+            JSON.readTree(new String(response.body(), StandardCharsets.UTF_8));
+        }
+        assertThat(new String(health.body(), StandardCharsets.UTF_8)).isEqualTo("{\"status\":\"UP\"}");
+    }
+
+    @Test
     @Order(99)
     @DisplayName("A termination signal ends the process and the listener stops accepting connections")
     void terminationEndsTheProcess() throws Exception {
