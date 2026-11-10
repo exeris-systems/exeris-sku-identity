@@ -67,7 +67,7 @@ class InvitationOnboardingIT {
         String email = email();
         TestExchange issued = invite(admin, email, "member");
         assertThat(issued.code()).isEqualTo(201);
-        String token = json(issued).get("token").stringValue();
+        String token = service.invitations.tokenFor(email);
         String password = new String(TestConfig.randomPassword());
 
         TestExchange accepted = service.post(BASE + "/invitations/accept", accept(tenant, token, email, password));
@@ -88,7 +88,7 @@ class InvitationOnboardingIT {
         UUID tenant = UUID.randomUUID();
         String admin = service.accessToken(service.member(tenant, "owner"));
         String email = email();
-        String token = json(invite(admin, email, "member")).get("token").stringValue();
+        String token = service.invite(admin, email, "member");
         assertThat(service.post(BASE + "/invitations/accept",
                 accept(tenant, token, email, new String(TestConfig.randomPassword()))).code()).isEqualTo(201);
 
@@ -106,7 +106,7 @@ class InvitationOnboardingIT {
         UUID other = UUID.randomUUID();
         String admin = service.accessToken(service.member(tenant, "admin"));
         String email = email();
-        String token = json(invite(admin, email, "member")).get("token").stringValue();
+        String token = service.invite(admin, email, "member");
         String password = new String(TestConfig.randomPassword());
 
         TestExchange foreignTenant = service.post(BASE + "/invitations/accept", accept(other, token, email, password));
@@ -131,7 +131,7 @@ class InvitationOnboardingIT {
         UUID tenant = UUID.randomUUID();
         String admin = service.accessToken(service.member(tenant, "admin"));
         String email = email();
-        String token = json(invite(admin, email, "member")).get("token").stringValue();
+        String token = service.invite(admin, email, "member");
 
         TestExchange weak = service.post(BASE + "/invitations/accept", accept(tenant, token, email, "x"));
 
@@ -140,7 +140,7 @@ class InvitationOnboardingIT {
         assertThat(pending(tenant, token, email)).isTrue();
 
         Account existing = service.account();
-        String takenToken = json(invite(admin, existing.email(), "member")).get("token").stringValue();
+        String takenToken = service.invite(admin, existing.email(), "member");
         TestExchange taken = service.post(BASE + "/invitations/accept",
                 accept(tenant, takenToken, existing.email(), new String(TestConfig.randomPassword())));
 
@@ -155,7 +155,7 @@ class InvitationOnboardingIT {
         UUID tenant = UUID.randomUUID();
         String admin = service.accessToken(service.member(tenant, "admin"));
         String email = email();
-        String token = json(invite(admin, email, "member")).get("token").stringValue();
+        String token = service.invite(admin, email, "member");
 
         for (String field : new String[] {"role", "subjectId"}) {
             Map<String, Object> body = accept(tenant, token, email, new String(TestConfig.randomPassword()));
@@ -190,6 +190,52 @@ class InvitationOnboardingIT {
         assertThat(invite(admin, email(), "Not A Role").code()).isEqualTo(403);
         assertThat(invite(owner, email(), "owner").code()).isEqualTo(201);
         assertThat(invite(admin, email(), "admin").code()).isEqualTo(201);
+    }
+
+    @Test
+    @DisplayName("with no invitation delivery, issuing is refused and stores nothing")
+    void noDeliveryFailsClosed() throws Exception {
+        try (IdentityHarness undelivered = IdentityHarness.start(Map.of(), false)) {
+            UUID tenant = UUID.randomUUID();
+            String admin = undelivered.accessToken(undelivered.member(tenant, "admin"));
+            String email = email();
+
+            TestExchange issued = undelivered.post(BASE + "/invitations",
+                    Map.of("email", email, "role", "member"), bearer(admin));
+
+            assertThat(issued.code()).isEqualTo(503);
+            assertThat(issued.body()).isEqualTo("{\"error\":\"invitation_delivery_unavailable\"}");
+            assertThat(invitationRows(undelivered, email)).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("a delivery that fails leaves no invitation behind")
+    void deliveryFailureLeavesNoInvitation() throws Exception {
+        UUID tenant = UUID.randomUUID();
+        String admin = service.accessToken(service.member(tenant, "admin"));
+        String email = email();
+        service.invitations.failNext();
+
+        TestExchange failed = invite(admin, email, "member");
+
+        assertThat(failed.code()).isEqualTo(502);
+        assertThat(failed.body()).isEqualTo("{\"error\":\"invitation_delivery_failed\"}");
+        assertThat(invitationRows(service, email)).isZero();
+        assertThat(invite(admin, email, "member").code()).as("the next attempt succeeds").isEqualTo(201);
+        assertThat(invitationRows(service, email)).isEqualTo(1);
+    }
+
+    private static long invitationRows(IdentityHarness harness, String email) throws Exception {
+        try (java.sql.Connection owner = harness.database.owner();
+             java.sql.PreparedStatement count = owner.prepareStatement(
+                     "SELECT count(*) FROM invitations WHERE email = ?")) {
+            count.setString(1, email);
+            try (java.sql.ResultSet rows = count.executeQuery()) {
+                rows.next();
+                return rows.getLong(1);
+            }
+        }
     }
 
     @Test

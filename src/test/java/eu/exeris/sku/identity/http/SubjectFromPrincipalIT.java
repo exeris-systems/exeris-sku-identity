@@ -55,6 +55,7 @@ class SubjectFromPrincipalIT {
                 "newPassword", new String(TestConfig.randomPassword())));
         bodies.put(BASE + "/mfa/totp/enrollment", Map.of());
         bodies.put(BASE + "/mfa/totp/enrollment/confirm", Map.of("code", "123456"));
+        bodies.put(BASE + "/mfa/recovery-codes", Map.of());
         bodies.put(BASE + "/sessions/revoke", Map.of("sessionId", UUID.randomUUID().toString()));
         bodies.put(BASE + "/invitations", Map.of("email", "new@example.test", "role", "member"));
 
@@ -175,7 +176,7 @@ class SubjectFromPrincipalIT {
         assertThat(issued.code()).isEqualTo(201);
         JsonNode body = json(issued);
         assertThat(body.get("tenantId").stringValue()).isEqualTo(tenantB.toString());
-        String token = body.get("token").stringValue();
+        String token = service.invitations.tokenFor(email);
         assertThat(TenantScope.call(tenantB,
                 () -> service.composition.services().invitations().findPending(token, tenantB, email))).isPresent();
         assertThat(TenantScope.call(tenantA,

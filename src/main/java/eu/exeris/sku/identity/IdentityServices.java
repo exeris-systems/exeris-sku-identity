@@ -17,10 +17,13 @@ import eu.exeris.caps.sessionmanagement.api.SessionStore;
 import eu.exeris.caps.sessionmanagement.spi.AccessTokenIssuer;
 import eu.exeris.caps.tokenissuer.api.JwksPublisher;
 import eu.exeris.caps.tokenissuer.api.SigningKeyRotation;
+import eu.exeris.sku.identity.auth.InvitationDelivery;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfig;
+import eu.exeris.sku.identity.persistence.JoiningTransactionalExecutor;
 
 import java.time.Clock;
+import java.util.Optional;
 
 /**
  * The composed capabilities a route handler works with.
@@ -44,6 +47,8 @@ import java.time.Clock;
  * @param mfaChallenges         the challenge between a correct password and a second factor
  * @param invitations           invitations into a tenant
  * @param memberships           where tenant memberships live
+ * @param invitationDelivery    where invitation tokens are handed to the invitee; empty when none is configured
+ * @param transactions          the executor every capability writes through, for joining writes in one transaction
  * @param jwks                  the published signing keys
  * @param signingKeys           rotation and retirement of the signing keys
  * @param audit                 the audit sink every capability records to
@@ -66,6 +71,8 @@ public record IdentityServices(
         MfaChallenge mfaChallenges,
         InvitationService invitations,
         MembershipDirectory memberships,
+        Optional<InvitationDelivery> invitationDelivery,
+        JoiningTransactionalExecutor transactions,
         JwksPublisher jwks,
         SigningKeyRotation signingKeys,
         AuditLogSink audit,

@@ -52,6 +52,10 @@ public enum Problem {
     INVALID_CODE(HttpStatus.BAD_REQUEST, "invalid_code"),
     /** There is nothing with that identifier that belongs to the caller. */
     NOT_FOUND(HttpStatus.NOT_FOUND, "not_found"),
+    /** No invitation delivery is configured, so no invitation can be issued. */
+    INVITATION_DELIVERY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "invitation_delivery_unavailable"),
+    /** The invitation delivery refused the token, so the invitation was not stored. */
+    INVITATION_DELIVERY_FAILED(HttpStatus.BAD_GATEWAY, "invitation_delivery_failed"),
     /** Something failed inside the service. */
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "internal_error");
 

@@ -36,17 +36,21 @@ public final class IdentityHarness implements AutoCloseable {
     public final PostgresSupport.Database database;
     public final InMemoryMembershipDirectory directory;
     public final RecordingNotificationDispatcher notifications;
+    /** The recording invitation delivery; present in the composition unless the harness was started without one. */
+    public final RecordingInvitationDelivery invitations;
     public final IdentityComposition composition;
     public final IdentityConfig config;
     private final Map<String, String> env;
 
     private IdentityHarness(PostgresSupport.Database database, InMemoryMembershipDirectory directory,
-                            RecordingNotificationDispatcher notifications, IdentityComposition composition,
+                            RecordingNotificationDispatcher notifications, RecordingInvitationDelivery invitations,
+                            IdentityComposition composition,
                             IdentityConfig config, Map<String, String> env) {
         this.env = env;
         this.database = database;
         this.directory = directory;
         this.notifications = notifications;
+        this.invitations = invitations;
         this.composition = composition;
         this.config = config;
     }
@@ -62,12 +66,22 @@ public final class IdentityHarness implements AutoCloseable {
      * @param overrides settings that replace the test defaults
      */
     public static IdentityHarness start(Map<String, String> overrides) throws Exception {
+        return start(overrides, true);
+    }
+
+    /**
+     * A started service.
+     *
+     * @param overrides    settings that replace the test defaults
+     * @param withDelivery whether an invitation delivery is configured
+     */
+    public static IdentityHarness start(Map<String, String> overrides, boolean withDelivery) throws Exception {
         Map<String, String> env = new HashMap<>(TestConfig.env());
         for (String group : RATE_LIMIT_GROUPS) {
             env.put("EXERIS_RATELIMIT_" + group + "_CAPACITY", "100000");
         }
         env.putAll(overrides);
-        return start(env, PostgresSupport.newDatabase());
+        return start(env, PostgresSupport.newDatabase(), withDelivery);
     }
 
     /**
@@ -79,24 +93,29 @@ public final class IdentityHarness implements AutoCloseable {
     public IdentityHarness restartedWith(Map<String, String> overrides) throws Exception {
         Map<String, String> changed = new HashMap<>(env);
         changed.putAll(overrides);
-        return start(changed, database);
+        return start(changed, database, invitations != null);
     }
 
-    private static IdentityHarness start(Map<String, String> env, PostgresSupport.Database database)
-            throws Exception {
+    private static IdentityHarness start(Map<String, String> env, PostgresSupport.Database database,
+                                         boolean withDelivery) throws Exception {
         IdentityConfig config = IdentityConfig.load(env);
         InMemoryMembershipDirectory directory = new InMemoryMembershipDirectory();
         RecordingNotificationDispatcher notifications = new RecordingNotificationDispatcher();
-        IdentityComposition composition = IdentityComposition.builder()
+        RecordingInvitationDelivery invitations = withDelivery ? new RecordingInvitationDelivery() : null;
+        IdentityComposition.Builder builder = IdentityComposition.builder()
                 .config(config)
                 .transactionalExecutor(new JdbcTransactionalExecutor(database))
                 .passwordEncoder(new Argon2idPasswordEncoder(config.passwordHashing()))
                 .notificationDispatcher(notifications)
                 .membershipDirectory(directory)
-                .routes(new IdentityRoutes(config))
-                .build();
+                .routes(new IdentityRoutes(config));
+        if (invitations != null) {
+            builder.invitationDelivery(invitations);
+        }
+        IdentityComposition composition = builder.build();
         composition.start();
-        return new IdentityHarness(database, directory, notifications, composition, config, Map.copyOf(env));
+        return new IdentityHarness(database, directory, notifications, invitations, composition, config,
+                Map.copyOf(env));
     }
 
     /** The registry, for reading the routes. Requests go through {@link #send}, which binds the peer address. */
@@ -156,6 +175,22 @@ public final class IdentityHarness implements AutoCloseable {
         Account account = account();
         directory.grant(tenant, account.subject(), role);
         return account;
+    }
+
+    /**
+     * Issues an invitation as the caller and returns the token the delivery received for the address.
+     *
+     * @param accessToken the inviter's access token
+     * @param email       the invitee's address
+     * @param role        the role to invite into
+     */
+    public String invite(String accessToken, String email, String role) {
+        TestExchange issued = post("/api/v1/auth/invitations", Map.of("email", email, "role", role),
+                bearer(accessToken));
+        if (issued.code() != 201) {
+            throw new IllegalStateException("issuing answered " + issued.code());
+        }
+        return invitations.tokenFor(email);
     }
 
     /** The body of a login request. */

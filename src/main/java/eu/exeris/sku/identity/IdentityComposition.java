@@ -33,8 +33,11 @@ import eu.exeris.kernel.spi.security.credentials.KernelPasswordEncoder;
 import eu.exeris.sdk.composition.lifecycle.CapabilityLifecycleHooks;
 import eu.exeris.sku.identity.auth.AdaptiveArgon2Rehash;
 import eu.exeris.sku.identity.auth.DirectoryInvitationAdministrators;
+import eu.exeris.sku.identity.auth.InvitationDelivery;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfig;
+import eu.exeris.sku.identity.persistence.JoiningTransactionalExecutor;
+import eu.exeris.sku.identity.wiring.CommitOrderedAuditRecorder;
 import eu.exeris.sku.identity.wiring.DeferredJwtPolicy;
 import eu.exeris.sku.identity.wiring.PeerAddresses;
 import eu.exeris.sku.identity.wiring.SessionRevocationAdapter;
@@ -46,6 +49,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -72,6 +76,7 @@ public final class IdentityComposition {
     private final JwtServiceBoundaryBinding jwtBinding;
     private final CredentialProvisioning credentialProvisioning;
     private final IdentityServices services;
+    private final JoiningTransactionalExecutor transactions;
     private State state = State.BUILT;
 
     private enum State { BUILT, STARTED, STOPPED }
@@ -85,6 +90,7 @@ public final class IdentityComposition {
         this.jwtBinding = jwtBinding;
         this.credentialProvisioning = services.credentialProvisioning();
         this.services = services;
+        this.transactions = services.transactions();
     }
 
     /**
@@ -210,6 +216,16 @@ public final class IdentityComposition {
         return TenantMembershipFilter.pathParameter(pathParameter);
     }
 
+    /**
+     * The executor every capability reads and writes through. A host part that is called inside an
+     * acceptance or an issue, such as a membership directory or an invitation delivery, writes through it
+     * so that its write joins the transaction; a write through the kernel's executor directly, from
+     * inside a request, fails because the request's connection is already in a transaction.
+     */
+    public JoiningTransactionalExecutor transactionalExecutor() {
+        return transactions;
+    }
+
     /** The composed capabilities. */
     public IdentityServices services() {
         return services;
@@ -223,6 +239,7 @@ public final class IdentityComposition {
         private KernelPasswordEncoder passwordEncoder;
         private eu.exeris.caps.credentialstore.spi.NotificationDispatcher notificationDispatcher;
         private MembershipDirectory membershipDirectory;
+        private InvitationDelivery invitationDelivery;
         private JobScheduler jobScheduler;
         private IdentityConfig config;
         private Clock clock = Clock.systemUTC();
@@ -269,6 +286,15 @@ public final class IdentityComposition {
         /** Where tenant memberships and roles live. Required. */
         public Builder membershipDirectory(MembershipDirectory directory) {
             this.membershipDirectory = Objects.requireNonNull(directory, "directory must not be null");
+            return this;
+        }
+
+        /**
+         * Hands invitation tokens to the invitees' mailboxes. Optional: without it, issuing an invitation
+         * is refused and nothing is stored, because the token would have no way to reach the invitee.
+         */
+        public Builder invitationDelivery(InvitationDelivery delivery) {
+            this.invitationDelivery = Objects.requireNonNull(delivery, "delivery must not be null");
             return this;
         }
 
@@ -331,6 +357,7 @@ public final class IdentityComposition {
                 throw new IllegalStateException("jobScheduler is required unless the configuration sets manual "
                         + "signing-key rotation");
             }
+            JoiningTransactionalExecutor transactionalExecutor = JoiningTransactionalExecutor.wrap(this.transactionalExecutor);
             ServiceBoundaryCoreModule boundary = serviceBoundary != null
                     ? serviceBoundary
                     : ServiceBoundaryCoreModule.builder().strictRoutes(true).build();
@@ -381,7 +408,7 @@ public final class IdentityComposition {
                     new AdaptiveArgon2Rehash(passwordEncoder, config.passwordHashing()),
                     notificationDispatcher,
                     new SessionRevocationAdapter(sessions.sessionStore()),
-                    new eu.exeris.caps.credentialstore.spi.AuditLogSinkRecorder(auditSink),
+                    new CommitOrderedAuditRecorder(new eu.exeris.caps.credentialstore.spi.AuditLogSinkRecorder(auditSink)),
                     config.credentials().lockout(), config.credentials().token(), config.credentials().password());
 
             MfaTotpModule mfa = new MfaTotpModule(capabilityEnvironment, transactionalExecutor, auditSink, totpIssuer);
@@ -397,7 +424,8 @@ public final class IdentityComposition {
                     sessions.sessionStore(), sessions.refreshTokenRotation(), sessionTokens,
                     mfa.getTotpFactorRegistry(), mfa.getTotpVerifier(), mfa.getRecoveryCodes(),
                     mfa.getMfaChallenge(),
-                    invitations.invitationService(), membershipDirectory, tokenIssuer.jwksPublisher(),
+                    invitations.invitationService(), membershipDirectory, Optional.ofNullable(invitationDelivery),
+                    transactionalExecutor, tokenIssuer.jwksPublisher(),
                     tokenIssuer.signingKeyRotation(), auditSink,
                     i18n.localeResolver(), i18n.translationRegistry());
 
