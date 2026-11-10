@@ -4,8 +4,7 @@ import eu.exeris.kernel.spi.http.HttpExchange;
 import eu.exeris.kernel.spi.http.HttpHeader;
 import eu.exeris.kernel.spi.http.HttpResponse;
 import eu.exeris.kernel.spi.http.HttpStatus;
-import eu.exeris.kernel.spi.http.HttpVersion;
-import tools.jackson.databind.json.JsonMapper;
+import eu.exeris.kernel.spi.http.HttpTypedResponse;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -13,16 +12,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Writes JSON responses. Bodies are serialised from values, never concatenated, and every response forbids
- * caching because it may carry a credential.
+ * Writes JSON responses. Bodies are encoded by the kernel from values, never concatenated, and every
+ * response forbids caching because it may carry a credential.
  */
 final class Responses {
 
-    private final JsonMapper mapper;
     private final Cors cors;
 
-    Responses(JsonMapper mapper, Cors cors) {
-        this.mapper = mapper;
+    Responses(Cors cors) {
         this.cors = cors;
     }
 
@@ -35,16 +32,13 @@ final class Responses {
         return result;
     }
 
+    /** Answers with the value encoded as JSON by the kernel; the engine owns the encoded body. */
     void json(HttpExchange exchange, HttpStatus status, Object body) {
-        byte[] bytes = mapper.writeValueAsBytes(body);
-        List<HttpHeader> headers = baseHeaders(exchange);
-        headers.add(new HttpHeader("Content-Type", "application/json"));
-        headers.add(new HttpHeader("Content-Length", String.valueOf(bytes.length)));
-        exchange.respond(new HttpResponse(status, HttpVersion.HTTP_1_1, headers, new ByteArrayLoanedBuffer(bytes)));
+        exchange.respond(new HttpTypedResponse(status, baseHeaders(exchange), body));
     }
 
     void noContent(HttpExchange exchange) {
-        exchange.respond(HttpResponse.noBody(HttpStatus.NO_CONTENT, HttpVersion.HTTP_1_1, baseHeaders(exchange)));
+        exchange.respond(HttpResponse.noBody(HttpStatus.NO_CONTENT, exchange.request().version(), baseHeaders(exchange)));
     }
 
     void problem(HttpExchange exchange, Problem problem) {

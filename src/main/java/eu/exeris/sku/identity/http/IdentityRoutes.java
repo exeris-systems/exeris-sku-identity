@@ -130,7 +130,7 @@ public final class IdentityRoutes implements RouteContributor {
     public List<ApiSurfaceRoute> routes(IdentityServices services) {
         JsonBodies bodies = new JsonBodies(JsonBodies.mapper());
         Cors cors = Cors.of(config.corsOrigins());
-        Responses responses = new Responses(JsonBodies.mapper(), cors);
+        Responses responses = new Responses(cors);
         Guard guard = new Guard(responses);
         SessionIssuance sessions = new SessionIssuance(services);
         Handlers handlers = new Handlers(
