@@ -56,6 +56,27 @@ public final class PostgresSupport {
      * @throws SQLException when the database cannot be prepared
      */
     public static synchronized Database newDatabase() throws SQLException {
+        Database database = emptyDatabase();
+        try (Connection owner = database.owner()) {
+            IdentityMigrations.apply(owner);
+            try (Statement statement = owner.createStatement()) {
+                statement.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "
+                        + SERVICE_ROLE);
+                statement.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO " + SERVICE_ROLE);
+                statement.execute("REVOKE ALL ON TABLE " + IdentityMigrations.TRACKING_TABLE + " FROM "
+                        + SERVICE_ROLE);
+            }
+        }
+        return database;
+    }
+
+    /**
+     * Creates a database with nothing in it. The service role exists and owns nothing.
+     *
+     * @return the new database
+     * @throws SQLException when the database cannot be prepared
+     */
+    public static synchronized Database emptyDatabase() throws SQLException {
         if (!CONTAINER.isRunning()) {
             CONTAINER.start();
         }
@@ -71,19 +92,13 @@ public final class PostgresSupport {
             }
         }
         String ownerUrl = urlFor(name);
-        Database database = new Database(ownerUrl, CONTAINER.getUsername(), CONTAINER.getPassword(),
+        return new Database(ownerUrl, CONTAINER.getUsername(), CONTAINER.getPassword(),
                 ownerUrl, SERVICE_ROLE, servicePassword);
-        try (Connection owner = database.owner()) {
-            IdentityMigrations.apply(owner);
-            try (Statement statement = owner.createStatement()) {
-                statement.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "
-                        + SERVICE_ROLE);
-                statement.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO " + SERVICE_ROLE);
-                statement.execute("REVOKE ALL ON TABLE " + IdentityMigrations.TRACKING_TABLE + " FROM "
-                        + SERVICE_ROLE);
-            }
-        }
-        return database;
+    }
+
+    /** The name of the service role every database grants to. */
+    public static String serviceRole() {
+        return SERVICE_ROLE;
     }
 
     private static String urlFor(String database) {
