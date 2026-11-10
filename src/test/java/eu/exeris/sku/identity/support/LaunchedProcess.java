@@ -38,9 +38,22 @@ public final class LaunchedProcess implements AutoCloseable {
      * @param arguments   the command line after the class name
      */
     public static LaunchedProcess start(Map<String, String> environment, String... arguments) throws IOException {
+        return start(environment, List.of(), arguments);
+    }
+
+    /**
+     * Starts the launcher with extra JVM options.
+     *
+     * @param environment the whole environment of the process
+     * @param jvmOptions  options placed before the class path
+     * @param arguments   the command line after the class name
+     */
+    public static LaunchedProcess start(Map<String, String> environment, List<String> jvmOptions,
+                                        String... arguments) throws IOException {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         command.add("--enable-native-access=ALL-UNNAMED");
+        command.addAll(jvmOptions);
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
         command.add(IdentitySkuApplication.class.getName());

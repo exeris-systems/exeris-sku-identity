@@ -52,7 +52,7 @@ The code is imported. Closing 0.1.0 needs a green CI run on JDK 25 and 26 with t
 - [x] Multi-factor authentication via RFC 6238 TOTP with cryptographic recovery codes
 - [x] EdDSA (Ed25519) access token issuance with JWKS publication and rotation
 - [x] Session management with atomic refresh token rotation; reuse of a refresh token revokes the session and there is no grace window
-- [x] Member invitations flow supporting tokenized onboarding and tenant assignment
+- [x] Member invitations flow supporting tokenized onboarding and tenant assignment; the token is delivered through the host's `InvitationDelivery` and never returned to the inviter
 - [ ] Licence enforcement: `IdentitySkuEntitlement` (id `exeris-sku-identity`) validated against the kernel Phase 0 gate
 - [x] `composition.json` manifest validated with deterministic SHA-256 content binding passing `CompositionStampAssertion`
 - [x] Integration tests against PostgreSQL through Testcontainers for every IAM workflow; unit tests with JUnit 5 and AssertJ

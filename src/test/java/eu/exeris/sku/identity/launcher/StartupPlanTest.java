@@ -2,6 +2,8 @@ package eu.exeris.sku.identity.launcher;
 
 import eu.exeris.sku.identity.config.IdentityConfigException;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
+import eu.exeris.sku.identity.support.RecordingInvitationDelivery;
+import eu.exeris.sku.identity.support.RecordingNotificationDispatcher;
 import eu.exeris.sku.identity.support.TestConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -20,12 +23,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class StartupPlanTest {
 
     private static final String DIRECTORY = InMemoryMembershipDirectory.class.getName();
+    private static final String DISPATCHER = RecordingNotificationDispatcher.class.getName();
+    private static final String DELIVERY = RecordingInvitationDelivery.class.getName();
+    private static final String[] PRODUCTION_CLASS = {"production", "production-load-sim", "dr-hot"};
+    private static final String[] OTHER = {"development", "staging", "dr-cold"};
 
     private static Map<String, String> complete() {
         Map<String, String> env = new HashMap<>(TestConfig.env());
         env.put("EXERIS_DATABASE_URL", "jdbc:postgresql://db.example.test:5432/identity");
         env.put("EXERIS_DATABASE_USER", "identity_service");
         env.put("EXERIS_DATABASE_PASSWORD", TestConfig.randomBase64(12));
+        env.put("EXERIS_ENVIRONMENT", "development");
+        return env;
+    }
+
+    private static Map<String, String> hosted(String environment) {
+        Map<String, String> env = complete();
+        env.put("EXERIS_ENVIRONMENT", environment);
+        env.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", DIRECTORY);
+        env.put("EXERIS_IDENTITY_NOTIFICATION_DISPATCHER", DISPATCHER);
+        env.put("EXERIS_IDENTITY_INVITATION_DELIVERY", DELIVERY);
         return env;
     }
 
@@ -41,10 +58,12 @@ class StartupPlanTest {
         Map<String, String> env = complete();
         StartupPlan plan = StartupPlan.prepare(env);
 
-        assertThat(plan.productionClass()).isFalse();
+        assertThat(plan.environment().isProductionClass()).isFalse();
         assertThat(plan.membershipDirectory()).isInstanceOf(UnconfiguredMembershipDirectory.class);
         Map<String, String> kernel = plan.kernelProperties();
-        assertThat(kernel).containsEntry("exeris.http.mode", "SERVER")
+        assertThat(kernel).containsEntry("exeris.environment", "development")
+                .containsEntry("exeris.persistence.rlsEnabled", "true")
+                .containsEntry("exeris.http.mode", "SERVER")
                 .containsEntry("exeris.http.bindHost", "127.0.0.1")
                 .containsEntry("exeris.http.port", "8080")
                 .containsEntry("exeris.persistence.jdbcUrl", env.get("EXERIS_DATABASE_URL"))
@@ -112,48 +131,88 @@ class StartupPlanTest {
     }
 
     @Test
-    @DisplayName("A production-class environment without a membership directory is refused")
-    void productionNeedsDirectory() {
-        for (String environment : new String[] {"production", "production-load-sim", "dr-hot"}) {
+    @DisplayName("An environment that is not declared is refused, whatever else is set, and no stand-in is made")
+    void environmentMustBeDeclared() {
+        for (String blank : new String[] {null, "", "  "}) {
             Map<String, String> env = complete();
-            env.put("EXERIS_ENVIRONMENT", environment);
+            if (blank == null) {
+                env.remove("EXERIS_ENVIRONMENT");
+            } else {
+                env.put("EXERIS_ENVIRONMENT", blank);
+            }
 
             assertThat(refused(env).problems()).singleElement().asString()
-                    .contains("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY").contains("production-class");
+                    .contains("EXERIS_ENVIRONMENT is not set")
+                    .contains("development").contains("production-load-sim").contains("dr-hot");
         }
     }
 
     @Test
-    @DisplayName("An environment the kernel does not know is treated as production-class")
-    void unknownEnvironmentFailsClosed() {
+    @DisplayName("An environment the kernel does not know is refused, naming the six it does")
+    void unknownEnvironmentIsRefused() {
         Map<String, String> env = complete();
         env.put("EXERIS_ENVIRONMENT", "prod-ish");
 
         assertThat(refused(env).problems()).singleElement().asString()
-                .contains("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY");
+                .contains("EXERIS_ENVIRONMENT").contains("development").contains("staging").contains("production")
+                .contains("production-load-sim").contains("dr-cold").contains("dr-hot");
     }
 
     @Test
-    @DisplayName("A production-class environment with a directory is accepted")
-    void productionWithDirectory() {
-        Map<String, String> env = complete();
-        env.put("EXERIS_ENVIRONMENT", "production");
-        env.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", DIRECTORY);
+    @DisplayName("A production-class environment refuses to start unless the directory, the dispatcher and the delivery are all named")
+    void productionNeedsEveryHostPart() {
+        Map<String, String> keys = Map.of(
+                "EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", "a membership directory",
+                "EXERIS_IDENTITY_NOTIFICATION_DISPATCHER", "a notification dispatcher",
+                "EXERIS_IDENTITY_INVITATION_DELIVERY", "an invitation delivery");
+        for (String environment : PRODUCTION_CLASS) {
+            for (String missing : keys.keySet()) {
+                Map<String, String> env = hosted(environment);
+                env.remove(missing);
 
-        StartupPlan plan = StartupPlan.prepare(env);
-
-        assertThat(plan.productionClass()).isTrue();
-        assertThat(plan.membershipDirectory()).isInstanceOf(InMemoryMembershipDirectory.class);
+                assertThat(refused(env).problems()).as(environment + " without " + missing)
+                        .singleElement().asString().contains(missing).contains("production-class");
+            }
+        }
     }
 
     @Test
-    @DisplayName("Staging and dr-cold do not serve live traffic and need no directory")
-    void nonProductionClassesNeedNoDirectory() {
-        for (String environment : new String[] {"development", "staging", "dr-cold"}) {
+    @DisplayName("A production-class environment with all three host parts is accepted")
+    void productionWithEveryHostPart() {
+        for (String environment : PRODUCTION_CLASS) {
+            StartupPlan plan = StartupPlan.prepare(hosted(environment));
+
+            assertThat(plan.environment().isProductionClass()).isTrue();
+            assertThat(plan.membershipDirectory()).isInstanceOf(InMemoryMembershipDirectory.class);
+            assertThat(plan.notificationDispatcher()).isInstanceOf(RecordingNotificationDispatcher.class);
+            assertThat(plan.invitationDelivery()).isInstanceOf(RecordingInvitationDelivery.class);
+            assertThat(plan.kernelProperties()).containsEntry("exeris.environment", environment);
+        }
+    }
+
+    @Test
+    @DisplayName("The other environments start with stand-ins: nobody in any tenant, no delivery of tokens, no invitation delivery")
+    void otherEnvironmentsGetStandIns() {
+        for (String environment : OTHER) {
             Map<String, String> env = complete();
             env.put("EXERIS_ENVIRONMENT", environment);
 
-            assertThat(StartupPlan.prepare(env).productionClass()).isFalse();
+            StartupPlan plan = StartupPlan.prepare(env);
+
+            assertThat(plan.environment().isProductionClass()).isFalse();
+            assertThat(plan.membershipDirectory()).isInstanceOf(UnconfiguredMembershipDirectory.class);
+            assertThat(plan.notificationDispatcher()).isInstanceOf(UndeliveredNotifications.class);
+            assertThat(plan.invitationDelivery()).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("Row-level security is on in every environment, because the invitations policy reads the published tenant")
+    void rowLevelSecurityIsAlwaysOn() {
+        for (String environment : Set.of("development", "staging", "dr-cold", "production")) {
+            StartupPlan plan = StartupPlan.prepare(hosted(environment));
+
+            assertThat(plan.kernelProperties()).containsEntry("exeris.persistence.rlsEnabled", "true");
         }
     }
 
@@ -163,10 +222,12 @@ class StartupPlanTest {
         Map<String, String> env = complete();
         env.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", "example.absent.Directory");
         env.put("EXERIS_IDENTITY_NOTIFICATION_DISPATCHER", String.class.getName());
+        env.put("EXERIS_IDENTITY_INVITATION_DELIVERY", String.class.getName());
 
         assertThat(String.join("\n", refused(env).problems()))
                 .contains("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY names a class that cannot be loaded")
-                .contains("EXERIS_IDENTITY_NOTIFICATION_DISPATCHER names a class that is not a NotificationDispatcher");
+                .contains("EXERIS_IDENTITY_NOTIFICATION_DISPATCHER names a class that is not a NotificationDispatcher")
+                .contains("EXERIS_IDENTITY_INVITATION_DELIVERY names a class that is not a InvitationDelivery");
     }
 
     @Test

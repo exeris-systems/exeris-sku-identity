@@ -84,6 +84,7 @@ public final class IdentitySkuApplication {
         StartupPlan plan;
         try {
             plan = StartupPlan.prepare(environment);
+            requireSameEnvironment(plan);
             ServiceRoleCheck.verify(plan.database());
         } catch (IdentityConfigException e) {
             LOG.log(System.Logger.Level.ERROR, "Identity configuration refused, not starting: {0}", e.getMessage());
@@ -95,6 +96,15 @@ public final class IdentitySkuApplication {
         }
         run(plan);
         return 0;
+    }
+
+    /** The kernel reads its environment from a system property; it must name the one this service was given. */
+    private static void requireSameEnvironment(StartupPlan plan) {
+        String property = System.getProperty("exeris.environment");
+        if (property != null && !property.isBlank() && !property.trim().equals(plan.environment().id())) {
+            throw new IdentityConfigException(List.of("The system property exeris.environment disagrees with "
+                    + StartupPlan.ENVIRONMENT + ": the kernel and this service must run in one environment."));
+        }
     }
 
     private static void run(StartupPlan plan) {
@@ -130,15 +140,18 @@ public final class IdentitySkuApplication {
                         try {
                             // The pool is open; the secret need not stay readable in the process properties.
                             System.clearProperty("exeris.persistence.password");
-                            IdentityComposition built = IdentityComposition.builder()
+                            IdentityComposition.Builder builder = IdentityComposition.builder()
                                     .config(plan.config())
                                     .transactionalExecutor(KernelProviders.transactionalExecutor())
                                     .passwordEncoder(new Argon2idPasswordEncoder(plan.config().passwordHashing()))
                                     .notificationDispatcher(plan.notificationDispatcher())
                                     .membershipDirectory(plan.membershipDirectory())
                                     .jobScheduler(scheduler())
-                                    .routes(new IdentityRoutes(plan.config()))
-                                    .build();
+                                    .routes(new IdentityRoutes(plan.config()));
+                            if (plan.invitationDelivery() != null) {
+                                builder.invitationDelivery(plan.invitationDelivery());
+                            }
+                            IdentityComposition built = builder.build();
                             composition.set(built);
                             built.start();
                             handler.serve(built.httpHandler());

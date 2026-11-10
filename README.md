@@ -31,27 +31,34 @@ One strict, frozen route registry on the kernel HTTP subsystem. Every route decl
 - A refresh token is single use. Presenting a used one revokes the session.
 - A token names a tenant only when the subject has exactly one membership; otherwise it is tenant-less.
 - Second factor is RFC 6238 TOTP with recovery codes.
-- Accepting an invitation creates a verified account and grants the membership in the invitation's tenant. The body is `{tenantId, token, email, password}`.
+- Issuing an invitation stores it and hands its single-use token to the host's `InvitationDelivery`, in one transaction; the response carries `{invitationId, tenantId, email, role, expiresAt}` and never the token. If the delivery fails nothing is stored, and with no delivery configured issuing answers 503.
+- Accepting an invitation creates a verified account, because the token reached only the invitee's mailbox, and grants the membership in the invitation's tenant. The body is `{tenantId, token, email, password}`. The invitation is consumed, the account created and the membership granted in one transaction, and the response is sent after the commit; a failure part-way leaves no account and the invitation pending.
 - Error bodies carry a fixed code and never exception text. JSON request bodies are limited to 16 KiB, with unknown and duplicate fields refused.
 - CORS is off until `EXERIS_CORS_ALLOWED_ORIGINS` lists origins.
 
+## Limits
+
+- Revoking sessions (password change, reset, revoke-all) stops refresh, but access tokens already issued stay valid until they expire.
+- A session records the TCP peer address, which behind the required TLS terminator is the terminator's; trusted-proxy forwarding applies to rate limiting only.
+- The membership grant is an external call. A failure after it and before the commit can leave one grant for a subject that has no account; the next acceptance of the same invitation derives the same subject and finds the grant in place, and until then the grant opens nothing. A host whose directory writes through `IdentityComposition.transactionalExecutor()` takes part in the transaction and leaves nothing behind.
+
 ## Not covered
 
-Self sign-up; federated-login routes and providers (the capability is composed but exposes no route); tenant selection and switching; logout as its own route; listing and revoking invitations; disabling a second factor; a durable audit sink (the audit trail is in memory); message catalogues beyond English; and administrative routes.
+Joining a further tenant with an existing account (an invitation to an address that already has one is refused with `account_exists` and stays pending); self sign-up; federated-login routes and providers (the capability is composed but exposes no route); tenant selection and switching; logout as its own route; listing and revoking invitations; disabling a second factor; a durable audit sink (the audit trail is in memory); message catalogues beyond English; and administrative routes.
 
 ## Running it
 
 The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplication` with two commands: `serve` (the default) and `migrate`.
 
-- **Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that uses the same key names; the environment wins. Every problem is reported at once and the process exits with status 78 before the kernel starts. Nothing has a development fallback.
+- **Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that uses the same key names; the environment wins. Every problem is reported at once and the process exits with status 78 before the kernel starts. The environment must be declared.
 - **Required** secrets and names: `EXERIS_TOKEN_ISSUER_ISSUER`, `EXERIS_TOKEN_ISSUER_AUDIENCE`, a key-encryption keyring for each of the token issuer (`EXERIS_TOKEN_ISSUER_KEKS`), TOTP (`EXERIS_MFA_TOTP_KEKS`) and federated-login state (`EXERIS_FEDERATED_LOGIN_STATE_KEYS`), `EXERIS_MFA_TOTP_PEPPER`, and `EXERIS_DATABASE_URL`, `_USER` and `_PASSWORD`. Each secret also has a `_FILE` form. The remaining keys cover HTTP limits, token and MFA lifetimes, rate-limit groups, trusted proxies, credential policy and Argon2id parameters.
 - **Bind address** defaults to loopback; the container image sets `EXERIS_HTTP_BIND_HOST=0.0.0.0`.
 - **Database:** the service role must be neither a superuser nor `BYPASSRLS`, and startup refuses one that is. `migrate` applies the ordered migrations with a separate privileged connection (`EXERIS_MIGRATE_DATABASE_URL`, `_USER`, `_PASSWORD`) and, when `EXERIS_MIGRATE_SERVICE_ROLE` names a role, grants it access to every table except the migration record.
-- **Membership:** the SKU keeps no membership table. A host supplies a `MembershipDirectory` (`EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY` names its class) and a production-class `EXERIS_ENVIRONMENT`, including an unrecognised value, refuses to start without one. Outside production, accepting an invitation fails at the grant.
-- **Notifications:** `EXERIS_IDENTITY_NOTIFICATION_DISPATCHER` names a dispatcher class. Without one, verification and reset tokens are not delivered anywhere and each request logs a warning.
+- **Host parts:** `EXERIS_ENVIRONMENT` must name one of `development`, `staging`, `production`, `production-load-sim`, `dr-cold`, `dr-hot`; the service does not start without it, and the kernel is given the same value. `EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY`, `EXERIS_IDENTITY_NOTIFICATION_DISPATCHER` and `EXERIS_IDENTITY_INVITATION_DELIVERY` name the host's classes. In `production`, `production-load-sim` and `dr-hot` the service refuses to start unless all three are named. In the other environments, a missing directory is replaced by one in which nobody belongs to any tenant (tokens name no tenant and nobody can issue an invitation), a missing dispatcher by one that delivers nothing and logs that a token was not delivered, and with no invitation delivery, issuing an invitation answers 503 and stores nothing. A host part that writes to the service's database does so through `IdentityComposition.transactionalExecutor()`.
+- **Row-level security** is switched on for the kernel's persistence in every environment, because the invitations table is isolated by the tenant the kernel publishes for each transaction.
 - **Container:** `docker build -t exeris-sku-identity .` after `mvn package`.
 
-Embedding is through `IdentityComposition`: the host passes its strict `ServiceBoundaryCoreModule`, a `TransactionalExecutor`, a `KernelPasswordEncoder`, a `NotificationDispatcher`, a `MembershipDirectory` and a `JobScheduler`, adds its own routes, and calls `start()`, which freezes the registry. Only the launcher names a driver class.
+Embedding is through `IdentityComposition`: the host passes its strict `ServiceBoundaryCoreModule`, a `TransactionalExecutor`, a `KernelPasswordEncoder`, a `NotificationDispatcher`, an `InvitationDelivery`, a `MembershipDirectory` and a `JobScheduler`, adds its own routes, and calls `start()`, which freezes the registry. Only the launcher names a driver class, but the artefact depends on `exeris-kernel-community` at compile scope for the launcher's Argon2id encoder; an embedding host that supplies its own drivers excludes it.
 
 ## Build & test
 
