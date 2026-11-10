@@ -2,17 +2,22 @@ package eu.exeris.sku.identity.launcher;
 
 import eu.exeris.caps.credentialstore.spi.NotificationDispatcher;
 import eu.exeris.kernel.spi.contract.ExecutionEnvironment;
+import eu.exeris.kernel.spi.persistence.TransactionalExecutor;
 import eu.exeris.sku.identity.auth.InvitationDelivery;
+import eu.exeris.sku.identity.auth.JoinsServiceTransactions;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfig;
 import eu.exeris.sku.identity.config.IdentityConfigException;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -110,6 +115,23 @@ record StartupPlan(IdentityConfig config, DatabaseSettings database, int maxPool
             throw new IdentityConfigException(problems);
         }
         return new StartupPlan(config, database, poolSize, declared, directory, dispatcher, delivery);
+    }
+
+    /**
+     * Hands the executor that joins the composition's units to every loaded host part that asks for it.
+     * Parts are created before the kernel boots, so none can receive it at construction; the launcher calls
+     * this once the composition exists and before anything can call a part. A part that serves more than
+     * one role is handed it once.
+     *
+     * @param executor the composition's {@code transactionalExecutor()}
+     */
+    void joinTransactions(TransactionalExecutor executor) {
+        Set<Object> handed = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object part : new Object[]{membershipDirectory, notificationDispatcher, invitationDelivery}) {
+            if (part instanceof JoinsServiceTransactions joins && handed.add(part)) {
+                joins.joinTransactionsOf(executor);
+            }
+        }
     }
 
     /**

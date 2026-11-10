@@ -6,6 +6,7 @@ import eu.exeris.kernel.spi.http.HttpHeader;
 import eu.exeris.kernel.spi.http.HttpMethod;
 import eu.exeris.caps.ratelimit.api.PeerAddressSource;
 import eu.exeris.sku.identity.IdentityComposition;
+import eu.exeris.sku.identity.auth.InvitationDelivery;
 import eu.exeris.sku.identity.config.IdentityConfig;
 import eu.exeris.sku.identity.http.IdentityRoutes;
 import tools.jackson.databind.JsonNode;
@@ -96,12 +97,31 @@ public final class IdentityHarness implements AutoCloseable {
         return start(changed, database, invitations != null);
     }
 
+    /**
+     * A started service whose invitation delivery is the given host part instead of the recording one.
+     *
+     * @param delivery the delivery the composition is built with
+     */
+    public static IdentityHarness start(InvitationDelivery delivery) throws Exception {
+        Map<String, String> env = new HashMap<>(TestConfig.env());
+        for (String group : RATE_LIMIT_GROUPS) {
+            env.put("EXERIS_RATELIMIT_" + group + "_CAPACITY", "100000");
+        }
+        return start(env, PostgresSupport.newDatabase(), delivery);
+    }
+
     private static IdentityHarness start(Map<String, String> env, PostgresSupport.Database database,
                                          boolean withDelivery) throws Exception {
+        return start(env, database, withDelivery ? new RecordingInvitationDelivery() : null);
+    }
+
+    private static IdentityHarness start(Map<String, String> env, PostgresSupport.Database database,
+                                         InvitationDelivery delivery) throws Exception {
         IdentityConfig config = IdentityConfig.load(env);
         InMemoryMembershipDirectory directory = new InMemoryMembershipDirectory();
         RecordingNotificationDispatcher notifications = new RecordingNotificationDispatcher();
-        RecordingInvitationDelivery invitations = withDelivery ? new RecordingInvitationDelivery() : null;
+        RecordingInvitationDelivery invitations = delivery instanceof RecordingInvitationDelivery recording
+                ? recording : null;
         IdentityComposition.Builder builder = IdentityComposition.builder()
                 .config(config)
                 .transactionalExecutor(new JdbcTransactionalExecutor(database))
@@ -109,8 +129,8 @@ public final class IdentityHarness implements AutoCloseable {
                 .notificationDispatcher(notifications)
                 .membershipDirectory(directory)
                 .routes(new IdentityRoutes(config));
-        if (invitations != null) {
-            builder.invitationDelivery(invitations);
+        if (delivery != null) {
+            builder.invitationDelivery(delivery);
         }
         IdentityComposition composition = builder.build();
         composition.start();

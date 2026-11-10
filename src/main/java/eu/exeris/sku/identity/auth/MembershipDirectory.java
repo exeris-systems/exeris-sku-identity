@@ -31,10 +31,13 @@ public interface MembershipDirectory {
      * so the grant opens nothing, and the next acceptance of the same invitation creates the same subject
      * and finds the grant already there.
      *
-     * <p>An implementation that writes to the service's database does so through
-     * {@link eu.exeris.sku.identity.IdentityComposition#transactionalExecutor()}, so that its write is part
-     * of the acceptance. A write through the kernel's executor directly, from inside a request, is
-     * refused: the request's connection is already in a transaction. Reads need no such care.
+     * <p>An implementation that writes to the service's database must write through the executor that joins
+     * the acceptance's transaction, so that its write is part of the acceptance. A host part named to the
+     * launcher receives that executor by implementing {@link JoinsServiceTransactions}; a host that embeds
+     * the library reads it from {@link eu.exeris.sku.identity.IdentityComposition#transactionalExecutor()}.
+     * A write through any other executor is not part of the acceptance: on the connection the request
+     * already holds it is refused and rolls the acceptance back, and under another storage context it
+     * commits on its own and outlives a rollback. Reads need no such care.
      *
      * @param tenantId  the tenant
      * @param subjectId the account

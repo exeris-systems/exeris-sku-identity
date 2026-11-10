@@ -153,6 +153,9 @@ public final class IdentitySkuApplication {
                             }
                             IdentityComposition built = builder.build();
                             composition.set(built);
+                            // Host parts are created before the kernel boots; they get the executor now,
+                            // before start() runs any job and before handler.serve() lets any request in.
+                            plan.joinTransactions(built.transactionalExecutor());
                             built.start();
                             handler.serve(built.httpHandler());
                             LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",

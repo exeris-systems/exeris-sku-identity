@@ -1,5 +1,11 @@
 package eu.exeris.sku.identity.launcher;
 
+import eu.exeris.kernel.spi.persistence.TransactionalExecutor;
+import eu.exeris.sku.identity.auth.InvitationDelivery;
+import eu.exeris.sku.identity.auth.InvitationNotice;
+import eu.exeris.sku.identity.auth.JoinsServiceTransactions;
+import eu.exeris.sku.identity.auth.Membership;
+import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfigException;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.RecordingInvitationDelivery;
@@ -12,9 +18,13 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -228,6 +238,72 @@ class StartupPlanTest {
                 .contains("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY names a class that cannot be loaded")
                 .contains("EXERIS_IDENTITY_NOTIFICATION_DISPATCHER names a class that is not a NotificationDispatcher")
                 .contains("EXERIS_IDENTITY_INVITATION_DELIVERY names a class that is not a InvitationDelivery");
+    }
+
+    @Test
+    @DisplayName("Every loaded host part that asks for the joining executor is handed it, once")
+    void hostPartsReceiveTheExecutor() {
+        Map<String, String> env = hosted("production");
+        env.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", CountingPart.class.getName());
+        env.put("EXERIS_IDENTITY_INVITATION_DELIVERY", CountingPart.class.getName());
+        StartupPlan plan = StartupPlan.prepare(env);
+        TransactionalExecutor executor = stubExecutor();
+
+        plan.joinTransactions(executor);
+
+        assertThat(((CountingPart) plan.membershipDirectory()).received).containsExactly(executor);
+        assertThat(((CountingPart) plan.invitationDelivery()).received).containsExactly(executor);
+        assertThat(plan.notificationDispatcher()).isNotInstanceOf(JoinsServiceTransactions.class);
+    }
+
+    @Test
+    @DisplayName("One host part that serves several roles is handed the executor once")
+    void onePartServingTwoRolesIsHandedOnce() {
+        CountingPart both = new CountingPart();
+        StartupPlan plan = new StartupPlan(null, null, 1, null, both, new UndeliveredNotifications(), both);
+        TransactionalExecutor executor = stubExecutor();
+
+        plan.joinTransactions(executor);
+
+        assertThat(both.received).containsExactly(executor);
+    }
+
+    private static TransactionalExecutor stubExecutor() {
+        return (TransactionalExecutor) Proxy.newProxyInstance(StartupPlanTest.class.getClassLoader(),
+                new Class<?>[]{TransactionalExecutor.class}, (proxy, method, args) -> {
+                    if (method.getDeclaringClass() == Object.class) {
+                        return switch (method.getName()) {
+                            case "equals" -> proxy == args[0];
+                            case "hashCode" -> System.identityHashCode(proxy);
+                            default -> "stub executor";
+                        };
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    /** A host part loadable by class name that records the executors it is handed. */
+    public static final class CountingPart implements MembershipDirectory, InvitationDelivery, JoinsServiceTransactions {
+
+        final List<TransactionalExecutor> received = new ArrayList<>();
+
+        @Override
+        public void joinTransactionsOf(TransactionalExecutor executor) {
+            received.add(executor);
+        }
+
+        @Override
+        public List<Membership> memberships(UUID subjectId) {
+            return List.of();
+        }
+
+        @Override
+        public void grant(UUID tenantId, UUID subjectId, String role) {
+        }
+
+        @Override
+        public void deliver(InvitationNotice notice) {
+        }
     }
 
     @Test

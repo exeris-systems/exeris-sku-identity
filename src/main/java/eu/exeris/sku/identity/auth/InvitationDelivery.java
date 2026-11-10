@@ -11,12 +11,22 @@ package eu.exeris.sku.identity.auth;
  *
  * <p>{@link #deliver} runs inside the transaction that stores the invitation. If it throws, nothing is
  * stored and the inviter is told the delivery failed. If it returns and the commit then fails, the invitee
- * holds a token that opens nothing. An implementation that writes to a database does so through
- * {@link eu.exeris.sku.identity.IdentityComposition#transactionalExecutor()}, so that its write joins the
- * same transaction; a write through the kernel's executor directly, from inside a request, is refused by
- * the connection already being in a transaction.
+ * holds a token that opens nothing.
  *
- * <p>Implementations are called from request threads and must be thread-safe, and must return promptly.
+ * <p>The executor may run the transaction again after a serialization failure or a deadlock, so one
+ * request can call {@code deliver} more than once, each time with a different token; only the token of the
+ * attempt that commits opens anything. The call happens while the transaction holds a database connection,
+ * so it must return promptly: it hands the token over and does not wait for a mail server.
+ *
+ * <p>An implementation that writes to the service's database must write through the executor that joins
+ * the transaction, so that its write commits and rolls back with the invitation. A host part named to the
+ * launcher receives that executor by implementing {@link JoinsServiceTransactions}; a host that embeds the
+ * library reads it from {@link eu.exeris.sku.identity.IdentityComposition#transactionalExecutor()}. A write
+ * through any other executor is not part of the transaction: on the connection the request already holds it
+ * is refused and rolls the transaction back, and under another storage context it commits on its own and
+ * outlives a rollback.
+ *
+ * <p>Implementations are called from request threads and must be thread-safe.
  */
 public interface InvitationDelivery {
 
