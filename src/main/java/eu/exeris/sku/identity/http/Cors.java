@@ -8,7 +8,6 @@ import eu.exeris.kernel.spi.http.HttpExchange;
 import eu.exeris.kernel.spi.http.HttpHeader;
 import eu.exeris.kernel.spi.http.HttpResponse;
 import eu.exeris.kernel.spi.http.HttpStatus;
-import eu.exeris.kernel.spi.http.HttpVersion;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -85,7 +84,7 @@ final class Cors {
         }
         List<HttpHeader> headers = new ArrayList<>(toHeaders(decision.headers()));
         headers.add(new HttpHeader("Content-Length", "0"));
-        exchange.respond(HttpResponse.noBody(HttpStatus.NO_CONTENT, HttpVersion.HTTP_1_1, headers));
+        exchange.respond(HttpResponse.noBody(HttpStatus.NO_CONTENT, exchange.request().version(), headers));
     }
 
     private static List<HttpHeader> toHeaders(Map<String, String> headers) {
