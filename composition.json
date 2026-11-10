@@ -245,6 +245,11 @@
             "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
             "versionRange" : "[0.1.0,0.2.0)",
             "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.ApiSurfaceRegistry",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
           }
         ],
         "lifecycleOwner" : "eu.exeris.caps.ratelimit.RateLimitModule"
@@ -473,6 +478,16 @@
       "optional" : true,
       "satisfied" : false,
       "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.ratelimit.RateLimitModule",
+      "service" : "eu.exeris.caps.serviceboundarycore.api.ApiSurfaceRegistry",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule"
+      ]
     },
     {
       "module" : "eu.exeris.caps.ratelimit.RateLimitModule",

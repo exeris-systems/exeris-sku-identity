@@ -11,6 +11,7 @@ import eu.exeris.kernel.spi.http.RouteRequirement;
 import eu.exeris.kernel.spi.security.credentials.PasswordEncoderConfig;
 import eu.exeris.sku.identity.auth.PrincipalBridge;
 import eu.exeris.sku.identity.config.IdentityConfig;
+import eu.exeris.sku.identity.http.IdentityRoutes;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.JdbcTransactionalExecutor;
 import eu.exeris.sku.identity.support.PostgresSupport;
@@ -56,9 +57,15 @@ class IdentityCompositionTest {
         return builder(database);
     }
 
+    /**
+     * A composition with the service's own routes, as the launcher builds it: the configured rate-limit
+     * groups name those routes, and {@code start()} refuses a configured route that no registered route
+     * declares.
+     */
     private static IdentityComposition.Builder builder(PostgresSupport.Database target) {
         IdentityConfig config = TestConfig.load();
         return IdentityComposition.builder()
+                .routes(new IdentityRoutes(config))
                 .config(config)
                 .transactionalExecutor(new JdbcTransactionalExecutor(target))
                 .passwordEncoder(new Argon2idPasswordEncoder(new PasswordEncoderConfig(8_192, 1, 1, 32)))
@@ -164,6 +171,23 @@ class IdentityCompositionTest {
         assertThat(exchange.status()).isEqualTo(HttpStatus.OK);
         assertThat(seen.get().subjectId()).isEqualTo(subject);
         assertThat(seen.get().sessionId()).contains(session);
+    }
+
+    @Test
+    @DisplayName("start refuses a composition that rate-limits routes it does not serve")
+    void unservedRateLimitedRoutesAreRefused() {
+        composition = IdentityComposition.builder()
+                .config(TestConfig.load())
+                .transactionalExecutor(new JdbcTransactionalExecutor(database))
+                .passwordEncoder(new Argon2idPasswordEncoder(new PasswordEncoderConfig(8_192, 1, 1, 32)))
+                .notificationDispatcher(new RecordingNotificationDispatcher())
+                .membershipDirectory(new InMemoryMembershipDirectory())
+                .routes(probe())
+                .build();
+
+        assertThatThrownBy(composition::start)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("POST /api/v1/auth/login");
     }
 
     @Test

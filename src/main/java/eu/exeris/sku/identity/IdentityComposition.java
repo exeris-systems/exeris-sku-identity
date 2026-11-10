@@ -62,6 +62,11 @@ import java.util.Set;
  * {@link #apiSurfaceRegistry()} between {@code build} and {@code start}. {@link #stop()} drains and
  * terminates in the reverse order.
  *
+ * <p>The configured rate-limit groups name the public credential routes of
+ * {@link eu.exeris.sku.identity.http.IdentityRoutes}. {@code start} refuses a configured route that no
+ * registered route declares, so a host registers those routes, through that contributor or its own,
+ * before calling it; a limit on a route that is not served would protect nothing.
+ *
  * <p>The schema of the capabilities is applied beforehand, with
  * {@link eu.exeris.sku.identity.persistence.IdentityMigrations}.
  */
@@ -396,7 +401,7 @@ public final class IdentityComposition {
             };
 
             RateLimitModule rateLimit = new RateLimitModule(RateLimitServiceBoundaryBinding.of(
-                    chain, RateLimitFilterSettings.fromProperties(config.rateLimitProperties()), peerAddress));
+                    registry, RateLimitFilterSettings.fromProperties(config.rateLimitProperties()), peerAddress));
 
             SessionTokenIssuerAdapter sessionTokens = new SessionTokenIssuerAdapter(
                     tokenIssuer.accessTokenIssuer(), membershipDirectory);
