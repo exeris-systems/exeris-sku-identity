@@ -109,7 +109,8 @@ final class BootstrapOwnerCommand {
                             result.failure = e;
                         }
                     });
-        } catch (KernelBootstrap.BootstrapException e) {
+        } catch (KernelBootstrap.BootstrapException | RuntimeException e) {
+            // The kernel's licence refusal is a runtime exception, not a BootstrapException.
             LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was created: {0}", e.getMessage());
             return IdentitySkuApplication.EXIT_NOT_COMPLETED;
         }
