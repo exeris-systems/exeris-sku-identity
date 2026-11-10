@@ -8,6 +8,15 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * A {@link LoanedBuffer} over a heap byte array, used to hand an already encoded response body to the
+ * kernel. The array belongs to this buffer from construction on and is never returned to a pool: closing
+ * the last reference only runs the registered close actions. Slices and views share the array and keep
+ * their own reference count.
+ *
+ * <p>Reference counting is atomic; registering close actions is not thread-safe and belongs to the thread
+ * that builds the response. {@code setSize} does not check the value against the capacity.
+ */
 public final class ByteArrayLoanedBuffer implements LoanedBuffer {
 
     private final MemorySegment segment;

@@ -32,8 +32,9 @@ final class PasswordHandlers {
     void change(HttpExchange exchange) {
         JsonBodies.Fields body = bodies.read(exchange, Set.of("currentPassword", "newPassword"));
         char[] current = body.password("currentPassword");
-        char[] replacement = body.password("newPassword");
+        char[] replacement = null;
         try {
+            replacement = body.password("newPassword");
             services.credentialStore().changePassword(SessionPrincipal.current().subjectId(), current, replacement);
         } catch (InvalidCredentialException e) {
             throw Problem.WRONG_PASSWORD.raise();
@@ -45,7 +46,9 @@ final class PasswordHandlers {
             throw Problem.INVALID_PASSWORD.raise();
         } finally {
             Arrays.fill(current, '\0');
-            Arrays.fill(replacement, '\0');
+            if (replacement != null) {
+                Arrays.fill(replacement, '\0');
+            }
         }
         responses.noContent(exchange);
     }
