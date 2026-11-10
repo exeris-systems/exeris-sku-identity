@@ -58,7 +58,8 @@
         <assertj.version>3.27.7</assertj.version>
         <testcontainers.version>1.21.4</testcontainers.version>
         <postgresql.version>42.7.14</postgresql.version>
-        <surefire.version>3.6.0</surefire.version>
+        <!-- 3.6.0 ignores -Dgroups and -DexcludedGroups under JUnit 6, which the kernel-boot tag depends on. -->
+        <surefire.version>3.5.6</surefire.version>
     </properties>
 
     <dependencies>
@@ -124,8 +125,8 @@
             <version>${exeris.caps.version}</version>
         </dependency>
 
-        <!-- Kernel: a SKU chooses the driver, so Core is compile scope and the Community driver is runtime
-             scope, which an embedding host may exclude. -->
+        <!-- Kernel: a SKU chooses the driver. Only the launcher package names it; an embedding host that
+             supplies its own driver excludes this artifact and does not load the launcher. -->
         <dependency>
             <groupId>eu.exeris</groupId>
             <artifactId>exeris-kernel-spi</artifactId>
@@ -140,7 +141,6 @@
             <groupId>eu.exeris</groupId>
             <artifactId>exeris-kernel-community</artifactId>
             <version>${exeris.kernel.version}</version>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- Exeris SDK composition -->
@@ -209,11 +209,12 @@
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The JDBC driver the kernel's persistence pool and the migrate command open connections with -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <version>${postgresql.version}</version>
-            <scope>test</scope>
+            <scope>runtime</scope>
         </dependency>
     </dependencies>
 
