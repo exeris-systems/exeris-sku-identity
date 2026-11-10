@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.exeris</groupId>
+        <artifactId>exeris-app-parent</artifactId>
+        <version>0.11.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>eu.exeris.sku</groupId>
+    <artifactId>exeris-sku-identity</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Exeris SKU :: Identity</name>
+    <description>
+        Tier 3 Platform SKU composition for the identity family.
+        Composes password and multi-factor authentication, token issuance, sessions and invitations
+        into a standalone service that also embeds as a library.
+    </description>
+    <url>https://github.com/exeris-systems/exeris-sku-identity</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <organization>
+        <name>Exeris Systems</name>
+        <url>https://exeris.eu</url>
+    </organization>
+
+    <!-- The parent declares Apache-2.0; this SKU is source-available under the Exeris Commercial License. -->
+    <licenses>
+        <license>
+            <name>Exeris Commercial License</name>
+            <url>https://exeris.eu/licenses/commercial-1.1.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
+        <connection>scm:git:https://github.com/exeris-systems/exeris-sku-identity.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/exeris-systems/exeris-sku-identity.git</developerConnection>
+        <url>https://github.com/exeris-systems/exeris-sku-identity</url>
+    </scm>
+
+    <properties>
+        <!-- Kernel, SDK and tooling versions come from the parent's bom. No preview flag anywhere. -->
+
+        <!-- The capabilities are pinned at their snapshot; the contract range they are composed against is
+             [0.1.0,0.2.0), declared in composition.json and in each @Requires. -->
+        <exeris.caps.version>0.1.0-SNAPSHOT</exeris.caps.version>
+
+        <junit.version>6.1.3</junit.version>
+        <assertj.version>3.27.7</assertj.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <postgresql.version>42.7.14</postgresql.version>
+        <!-- 3.6.0 ignores -Dgroups and -DexcludedGroups under JUnit 6, which the kernel-boot tag depends on. -->
+        <surefire.version>3.5.6</surefire.version>
+    </properties>
+
+    <dependencies>
+        <!-- The twelve composed capabilities -->
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-service-boundary-core</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-jwt-validation</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-rate-limiting</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-audit-trail</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-cors-policy</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-i18n</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-credential-store</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-mfa-totp</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-token-issuer</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-session-management</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-invitations</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris.caps</groupId>
+            <artifactId>exeris-caps-federated-login</artifactId>
+            <version>${exeris.caps.version}</version>
+        </dependency>
+
+        <!-- Kernel: a SKU chooses the driver. Only the launcher package names it; an embedding host that
+             supplies its own driver excludes this artifact and does not load the launcher. -->
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-kernel-spi</artifactId>
+            <version>${exeris.kernel.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-kernel-core</artifactId>
+            <version>${exeris.kernel.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-kernel-community</artifactId>
+            <version>${exeris.kernel.version}</version>
+        </dependency>
+
+        <!-- Exeris SDK composition -->
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-sdk-composition-runtime</artifactId>
+            <version>${exeris.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-sdk-composition-spec</artifactId>
+            <version>${exeris.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-sdk-composition-lifecycle</artifactId>
+            <version>${exeris.sdk.version}</version>
+        </dependency>
+
+        <!-- Bounded JSON parsing of request bodies -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Licence-gate tests: the entitlement TCK -->
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-kernel-tck</artifactId>
+            <version>${exeris.kernel.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Composition manifest generation -->
+        <dependency>
+            <groupId>eu.exeris</groupId>
+            <artifactId>exeris-codegen-core</artifactId>
+            <version>${exeris.tooling.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JUnit and AssertJ only. No mocking frameworks. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Real PostgreSQL for the persistence tests -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- The JDBC driver the kernel's persistence pool and the migrate command open connections with -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire.version}</version>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+
+            <!-- A thin jar: the runtime classpath is copied beside it, nothing is shaded. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                            <mainClass>eu.exeris.sku.identity.launcher.IdentitySkuApplication</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.8.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-runtime-classpath</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

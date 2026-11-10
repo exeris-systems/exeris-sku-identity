@@ -1,0 +1,161 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: mvn verify (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 25 is the baseline the jar is compiled for (`maven.compiler.release` 25); 26 checks that the
+        # sources still compile on the next JDK. Both rows produce class-file major 69.
+        java: ['25', '26']
+
+    steps:
+      - name: Checkout exeris-sku-identity
+        uses: actions/checkout@v7
+        with:
+          path: exeris-sku-identity
+
+      # The composed capabilities are at 0.1.0-SNAPSHOT and published nowhere, so each is built from its
+      # default branch; a change there can turn this build red. The kernel, SDK and tooling are on
+      # Maven Central, so no package token and no settings file are involved.
+      - name: Checkout exeris-caps-service-boundary-core
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-service-boundary-core
+          ref: main
+          path: exeris-caps-service-boundary-core
+      - name: Checkout exeris-caps-audit-trail
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-audit-trail
+          ref: main
+          path: exeris-caps-audit-trail
+      - name: Checkout exeris-caps-cors-policy
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-cors-policy
+          ref: main
+          path: exeris-caps-cors-policy
+      - name: Checkout exeris-caps-i18n
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-i18n
+          ref: main
+          path: exeris-caps-i18n
+      - name: Checkout exeris-caps-rate-limiting
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-rate-limiting
+          ref: main
+          path: exeris-caps-rate-limiting
+      - name: Checkout exeris-caps-jwt-validation
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-jwt-validation
+          ref: main
+          path: exeris-caps-jwt-validation
+      - name: Checkout exeris-caps-token-issuer
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-token-issuer
+          ref: main
+          path: exeris-caps-token-issuer
+      - name: Checkout exeris-caps-session-management
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-session-management
+          ref: main
+          path: exeris-caps-session-management
+      - name: Checkout exeris-caps-credential-store
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-credential-store
+          ref: main
+          path: exeris-caps-credential-store
+      - name: Checkout exeris-caps-mfa-totp
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-mfa-totp
+          ref: main
+          path: exeris-caps-mfa-totp
+      - name: Checkout exeris-caps-invitations
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-invitations
+          ref: main
+          path: exeris-caps-invitations
+      - name: Checkout exeris-caps-federated-login
+        uses: actions/checkout@v7
+        with:
+          repository: exeris-systems/exeris-caps-federated-login
+          ref: main
+          path: exeris-caps-federated-login
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      # Two passes per capability, and the first is not redundant: exeris:generate runs at
+      # generate-sources, but the processor writes the capability metadata it reads only during compile.
+      # The order puts a capability after the capabilities its build needs.
+      - name: Install the composed capabilities to the local repository (two passes each)
+        run: |
+          for cap in service-boundary-core audit-trail cors-policy i18n rate-limiting jwt-validation token-issuer session-management credential-store mfa-totp invitations federated-login;
+          do
+            (cd "exeris-caps-$cap" \
+              && mvn -B -ntp compile -Dexeris.codegen.skip=true \
+              && mvn -B -ntp -DskipTests install) || exit 1
+          done
+
+      # The kernel refuses to boot a process that carries an EntitlementRequirement without a licence
+      # manifest, in every environment. The process test reads EXERIS_DEV_LICENSE_MANIFEST_PATH, passes it to the service it starts, and fails
+      # with a clear message when it is unset, so this step only warns: a run without the secret (a fork,
+      # a bot-opened pull request) reaches that failure by design rather than skipping the test.
+      - name: Provide the licence manifest
+        env:
+          EXERIS_DEV_LICENSE_MANIFEST: ${{ secrets.EXERIS_DEV_LICENSE_MANIFEST }}
+        run: |
+          if [ -z "${EXERIS_DEV_LICENSE_MANIFEST}" ]; then
+            echo "::warning::EXERIS_DEV_LICENSE_MANIFEST is not set; the tests tagged kernel-boot will fail"
+            exit 0
+          fi
+          MANIFEST="$RUNNER_TEMP/license-manifest.json"
+          umask 077
+          printf '%s' "${EXERIS_DEV_LICENSE_MANIFEST}" > "$MANIFEST"
+          echo "EXERIS_DEV_LICENSE_MANIFEST_PATH=$MANIFEST" >> "$GITHUB_ENV"
+
+      # Docker is available on ubuntu-latest, which the Testcontainers suites need.
+      - name: mvn verify
+        working-directory: exeris-sku-identity
+        run: mvn -B -ntp verify
+
+      # composition.json is generated by CompositionManifestTest's regeneration switch and compared by
+      # the test, so a drift already fails verify; this step also catches a file the build added.
+      - name: Assert the build left the tree as committed
+        working-directory: exeris-sku-identity
+        run: |
+          DRIFT=$(git status --porcelain --untracked-files=all)
+          if [ -n "$DRIFT" ]; then
+            echo "$DRIFT"
+            echo "::error::the build changed or added files; regenerate composition.json with -Dexeris.composition.regenerate=true and commit the result"
+            exit 1
+          fi
+
+      - name: Build the container image
+        if: matrix.java == '25'
+        working-directory: exeris-sku-identity
+        run: docker build -t exeris-sku-identity:ci .

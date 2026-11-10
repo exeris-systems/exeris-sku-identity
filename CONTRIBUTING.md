@@ -1,6 +1,6 @@
 # Contributing to exeris-sku-identity
 
-`exeris-sku-identity` is a proof of concept, built against `exeris-kernel` 0.13.0-SNAPSHOT on JDK 25 LTS.
+`exeris-sku-identity` is a proof of concept, built against `exeris-kernel` 0.13.1 on JDK 25 LTS.
 Artefacts are not published yet, so contributions are to the source on `main`.
 
 ## Non-negotiables

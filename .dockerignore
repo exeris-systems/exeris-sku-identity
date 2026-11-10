@@ -1,0 +1,6 @@
+target/classes
+target/test-classes
+target/generated-*
+target/maven-*
+target/surefire-reports
+.git

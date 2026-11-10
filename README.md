@@ -2,39 +2,82 @@
 
 The Identity and Access Management (IAM) Platform SKU: a composition of Exeris capabilities providing user onboarding, password authentication with Argon2id, TOTP multi-factor authentication, session management with refresh token rotation, federated login, and EdDSA (Ed25519) access token issuance with JWKS publication, running directly on the Exeris kernel HTTP subsystem with no Spring Framework, servlet container or Netty in the data plane.
 
-Status: proof of concept (`poc`), version line 0.1.x, built against `exeris-kernel` 0.13.0-SNAPSHOT on JDK 25 LTS. Nothing here is stable and no artefact has been published; code arrives in one import pull request.
+Status: proof of concept (`poc`), version line 0.1.x, built against `exeris-kernel` 0.13.1, `exeris-sdk` 0.13.3 and `exeris-tooling` 0.11.0 on JDK 25 LTS. Nothing here is stable and no artefact has been published.
 
 ## Where it sits
 
 - **Layer:** Tier 3 — Platform SKU (Service Boundary family), in [`high-level-architecture.md`](https://github.com/exeris-systems/exeris-docs/blob/main/high-level-architecture.md).
 - **Composes** 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
-- **Composition manifest:** `composition.json` at the repository root lists the 12 modules and their `@Provides` services (ADR-053).
-- **Entitlement:** the SKU's entitlement id is `exeris-sku-identity`, its artifactId (ADR-089).
-- **Wall (ADR-006):** the data plane is Exeris-native. No `org.springframework.*`, `jakarta.servlet.*`, `io.netty.*` or `reactor.*` type may appear.
+- **Composition manifest:** `composition.json` at the repository root lists the 12 modules and their `@Provides` services (ADR-053). A test regenerates it and fails on drift.
+- **Entitlement:** the SKU's entitlement id is `exeris-sku-identity`, its artifactId (ADR-089). Nine of the twelve capabilities are commercial and are entitled by the same licence manifest; `token-issuer`, `cors-policy` and `i18n` are community.
+- **Wall (ADR-006):** the data plane is Exeris-native. No `org.springframework.*`, `jakarta.servlet.*`, `io.netty.*` or `reactor.*` type appears.
 
-## What the source contains
+## What it provides
 
-Code arrives in one import pull request. The incoming implementation provides:
+One strict, frozen route registry on the kernel HTTP subsystem. Every route declares a requirement, and the subject and tenant of an authenticated request come from the verified token, never from the body or the query.
 
-- Identity and Access Management (IAM) workflows exposed through `service-boundary-core` directly on the Exeris kernel HTTP subsystem.
-- User onboarding, account verification, credential recovery, and member invitations.
-- Password authentication with Argon2id.
-- Multi-factor authentication via RFC 6238 TOTP and cryptographic recovery codes.
-- Session management with refresh token rotation.
-- Access token issuance using EdDSA (Ed25519) and active JWKS publication.
-- Federated login linking external OAuth2/OIDC identity providers.
-- Substrate driver-swap transparency across Community and Enterprise deployments.
+| Route | Access |
+| --- | --- |
+| `GET /health`, `GET /.well-known/jwks.json` | public |
+| `POST /api/v1/auth/login`, `/mfa/verify`, `/refresh` | public, rate limited |
+| `POST /api/v1/auth/password/reset-request`, `/password/reset`, `/verification/send` | public, rate limited |
+| `POST /api/v1/auth/verification/verify` | public |
+| `POST /api/v1/auth/invitations/accept` | public, rate limited |
+| `POST /api/v1/auth/password/change`, `/mfa/totp/enrollment`, `/mfa/totp/enrollment/confirm`, `/mfa/recovery-codes`, `/sessions/revoke`, `/sessions/revoke-all`; `GET /api/v1/auth/sessions` | authenticated |
+| `POST /api/v1/auth/invitations` | scope `invitations:write`, granted to the roles `owner` and `admin` |
+
+- Passwords are verified with Argon2id and re-hashed at login when the configured parameters change.
+- Access tokens are EdDSA (Ed25519), carry `sid`, `tid`, `roles` and `scope`, and are verified in process against the published key set. Keys rotate on a schedule.
+- A refresh token is single use. Presenting a used one revokes the session.
+- A token names a tenant only when the subject has exactly one membership; otherwise it is tenant-less.
+- Second factor is RFC 6238 TOTP with recovery codes.
+- Issuing an invitation stores it and hands its single-use token to the host's `InvitationDelivery`, in one transaction; the response carries `{invitationId, tenantId, email, role, expiresAt}` and never the token. If the delivery fails nothing is stored, and with no delivery configured issuing answers 503.
+- Accepting an invitation creates a verified account, because the token reached only the invitee's mailbox, and grants the membership in the invitation's tenant. The body is `{tenantId, token, email, password}`. The invitation is consumed, the account created and the membership granted in one transaction, and the response is sent after the commit; a failure part-way leaves no account and the invitation pending.
+- Error bodies carry a fixed code and never exception text. JSON request bodies are limited to 16 KiB, with unknown and duplicate fields refused.
+- CORS is off until `EXERIS_CORS_ALLOWED_ORIGINS` lists origins.
+
+## Limits
+
+- Revoking sessions (password change, reset, revoke-all) stops refresh, but access tokens already issued stay valid until they expire.
+- A session records the TCP peer address, which behind the required TLS terminator is the terminator's; trusted-proxy forwarding applies to rate limiting only.
+- The membership grant is an external call. A failure after it and before the commit can leave one grant for a subject that has no account; the next acceptance of the same invitation derives the same subject and finds the grant in place, and until then the grant opens nothing. A directory that writes through the joining executor (see Host parts) takes part in the transaction and leaves nothing behind.
+
+## Not covered
+
+Joining a further tenant with an existing account (an invitation to an address that already has one is refused with `account_exists` and stays pending); self sign-up; federated-login routes and providers (the capability is composed but exposes no route); tenant selection and switching; logout as its own route; listing and revoking invitations; disabling a second factor; a durable audit sink (the audit trail is in memory); message catalogues beyond English; and administrative routes.
+
+## Running it
+
+The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplication` with two commands: `serve` (the default) and `migrate`.
+
+- **Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that uses the same key names; the environment wins. Every problem is reported at once and the process exits with status 78 before the kernel starts. The environment must be declared.
+- **Required** secrets and names: `EXERIS_TOKEN_ISSUER_ISSUER`, `EXERIS_TOKEN_ISSUER_AUDIENCE`, a key-encryption keyring for each of the token issuer (`EXERIS_TOKEN_ISSUER_KEKS`), TOTP (`EXERIS_MFA_TOTP_KEKS`) and federated-login state (`EXERIS_FEDERATED_LOGIN_STATE_KEYS`), `EXERIS_MFA_TOTP_PEPPER`, and `EXERIS_DATABASE_URL`, `_USER` and `_PASSWORD`. Each secret also has a `_FILE` form. The remaining keys cover HTTP limits, token and MFA lifetimes, rate-limit groups, trusted proxies, credential policy and Argon2id parameters.
+- **Bind address** defaults to loopback; the container image sets `EXERIS_HTTP_BIND_HOST=0.0.0.0`.
+- **Database:** the service role must be neither a superuser nor `BYPASSRLS`, and startup refuses one that is. `migrate` applies the ordered migrations with a separate privileged connection (`EXERIS_MIGRATE_DATABASE_URL`, `_USER`, `_PASSWORD`) and, when `EXERIS_MIGRATE_SERVICE_ROLE` names a role, grants it access to every table except the migration record.
+- **Host parts:** `EXERIS_ENVIRONMENT` must name one of `development`, `staging`, `production`, `production-load-sim`, `dr-cold`, `dr-hot`; the service does not start without it, and the kernel is given the same value. `EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY`, `EXERIS_IDENTITY_NOTIFICATION_DISPATCHER` and `EXERIS_IDENTITY_INVITATION_DELIVERY` name the host's classes. In `production`, `production-load-sim` and `dr-hot` the service refuses to start unless all three are named. In the other environments, a missing directory is replaced by one in which nobody belongs to any tenant (tokens name no tenant and nobody can issue an invitation), a missing dispatcher by one that delivers nothing and logs that a token was not delivered, and with no invitation delivery, issuing an invitation answers 503 and stores nothing. `dr-cold` is not production-class in the kernel's classification, so a cold site promoted without changing `EXERIS_ENVIRONMENT` starts with these stand-ins and only logs warnings; set the environment to `dr-hot` or `production` when promoting.
+- **Host parts and the database:** a host part that writes to the service's database from inside a request writes through the executor that joins the service's transactions, so that its write commits and rolls back with the invitation or the account. A part named to the launcher is created through its public no-argument constructor before the kernel boots and receives that executor by implementing `eu.exeris.sku.identity.auth.JoinsServiceTransactions`: the launcher hands it over once, after the composition is built and before any job runs or any request is admitted. A host that embeds the library reads it from `IdentityComposition.transactionalExecutor()`. A write through any other executor is not part of the transaction: on the connection the request already holds it is refused and rolls the whole transaction back, and under another storage context it commits on its own connection and survives a rollback. Because the executor retries a transaction after a serialization failure or a deadlock, `InvitationDelivery.deliver` can run more than once for one request with a different token each time, and only the token of the attempt that commits opens anything; it runs while the transaction holds a connection, so it returns promptly.
+- **Row-level security** is switched on for the kernel's persistence in every environment, because the invitations table is isolated by the tenant the kernel publishes for each transaction.
+- **Container:** `docker build -t exeris-sku-identity .` after `mvn package`.
+
+Embedding is through `IdentityComposition`: the host passes its strict `ServiceBoundaryCoreModule`, a `TransactionalExecutor`, a `KernelPasswordEncoder`, a `NotificationDispatcher`, an `InvitationDelivery`, a `MembershipDirectory` and a `JobScheduler`, adds its own routes, and calls `start()`, which freezes the registry. Only the launcher names a driver class, but the artefact depends on `exeris-kernel-community` at compile scope for the launcher's Argon2id encoder; an embedding host that supplies its own drivers excludes it.
 
 ## Build & test
 
-Requires JDK 25 and Maven 3.9+.
+Requires JDK 25 and Maven 3.9+. The capabilities are at `0.1.0-SNAPSHOT` and published nowhere, so each of the 12 `exeris-caps-*` repositories is built from source first, in this order, with two passes each:
 
 ```bash
-mvn test
-mvn package -DskipTests
+mvn compile -Dexeris.codegen.skip=true
+mvn -DskipTests install
 ```
 
-The upstreams are not on Maven Central. The 12 `exeris-caps-*` modules above are built from source first, `exeris-sdk` is built from source, and `exeris-kernel` 0.13.0-SNAPSHOT is resolved from GitHub Packages, which needs a token with `read:packages`.
+`service-boundary-core`, `audit-trail`, `cors-policy`, `i18n`, `rate-limiting`, `jwt-validation`, `token-issuer`, `session-management`, `credential-store`, `mfa-totp`, `invitations`, `federated-login`. The kernel, SDK and tooling resolve from Maven Central.
+
+```bash
+mvn verify                              # needs Docker for the PostgreSQL integration tests
+mvn verify -DexcludedGroups=kernel-boot # without a licence manifest
+```
+
+The tests tagged `kernel-boot` boot the real kernel, which refuses to start without a licence manifest entitling `exeris-sku-identity` and its nine commercial capabilities. They read the manifest path from `EXERIS_DEV_LICENSE_MANIFEST_PATH`, hand it to the service they start as `EXERIS_LICENSE_MANIFEST_PATH`, and fail with a message when it is unset. CI writes the manifest from the organisation secret `EXERIS_DEV_LICENSE_MANIFEST`.
 
 ## Documentation
 
