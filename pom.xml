@@ -59,7 +59,7 @@
         <testcontainers.version>1.21.4</testcontainers.version>
         <postgresql.version>42.7.14</postgresql.version>
         <!-- 3.6.0 ignores -Dgroups and -DexcludedGroups under JUnit 6, which the kernel-boot tag depends on. -->
-        <surefire.version>3.5.6</surefire.version>
+        <surefire.version>3.6.1</surefire.version>
     </properties>
 
     <dependencies>
