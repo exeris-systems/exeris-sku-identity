@@ -1,5 +1,7 @@
 package eu.exeris.sku.identity.support.process;
 
+import eu.exeris.kernel.spi.persistence.TransactionalExecutor;
+import eu.exeris.sku.identity.auth.JoinsServiceTransactions;
 import eu.exeris.sku.identity.auth.Membership;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 
@@ -10,9 +12,14 @@ import java.util.Map;
 import java.util.UUID;
 
 /** A membership table kept in a file of the host directory, so a test can seed it and read it back. */
-public final class FileMembershipDirectory implements MembershipDirectory {
+public final class FileMembershipDirectory implements MembershipDirectory, JoinsServiceTransactions {
 
     static final String FILE = "memberships";
+
+    @Override
+    public void joinTransactionsOf(TransactionalExecutor executor) {
+        RlsProbe.join(executor);
+    }
 
     @Override
     public List<Membership> memberships(UUID subjectId) {

@@ -86,6 +86,8 @@ class IdentityProcessIT {
                 adminA.subject() + "|" + TENANT_A + "|admin" + System.lineSeparator()
                         + adminB.subject() + "|" + TENANT_B + "|admin" + System.lineSeparator());
         identity.put("EXERIS_TOKEN_ISSUER_MANUAL_ROTATION", "false");
+        // Every sign-in of the class comes from one address; the login group's limit is not what it tests.
+        identity.put("EXERIS_RATELIMIT_LOGIN_CAPACITY", "50");
 
         port = LaunchedProcess.freePort();
         Map<String, String> env = LaunchedProcess.serviceEnvironment(database, port, identity);
@@ -271,6 +273,7 @@ class IdentityProcessIT {
         assertThat(invitationsOf(TENANT_A)).isEqualTo(1);
         String[] probe = probes("issue").getLast();
         assertThat(probe[1]).as("the kernel executor is bound to the caller's tenant").isEqualTo(TENANT_A.toString());
+        assertThat(probe[2]).as("A's request reads its own tenant's rows").matches("[1-9][0-9]*");
         assertThat(probe[3]).as("tenant B's committed row is invisible to A's request").isEqualTo("0");
     }
 
@@ -291,6 +294,7 @@ class IdentityProcessIT {
         String[] probe = probes("accept").getLast();
         assertThat(probe[1]).as("the kernel executor is bound to the invitation's tenant")
                 .isEqualTo(TENANT_A.toString());
+        assertThat(probe[2]).as("the acceptance reads its own tenant's rows").matches("[1-9][0-9]*");
         assertThat(probe[3]).as("tenant B's row is invisible while accepting into A").isEqualTo("0");
         String invitee = claims(signIn(new IdentityHarness.Account(UUID.randomUUID(), email, password)));
         assertThat(invitee).contains(TENANT_A.toString()).contains("\"member\"");
