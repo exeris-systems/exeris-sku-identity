@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("SessionTokenIssuerAdapter")
 class SessionTokenIssuerAdapterTest {
@@ -80,6 +81,43 @@ class SessionTokenIssuerAdapterTest {
         assertThat(issued.get().tenantId()).isNull();
         assertThat(issued.get().roles()).isEmpty();
         assertThat(issued.get().customClaims()).doesNotContainKey("scope");
+    }
+
+    @Test
+    @DisplayName("a directory that returns null breaks its contract: the token is refused, not issued without a tenant")
+    void nullMembershipsAreRefused() {
+        SessionTokenIssuerAdapter broken = new SessionTokenIssuerAdapter(fake, new MembershipDirectory() {
+            @Override
+            public java.util.List<eu.exeris.sku.identity.auth.Membership> memberships(UUID subjectId) {
+                return null;
+            }
+
+            @Override
+            public void grant(UUID tenantId, UUID subjectId, String role) {
+            }
+        });
+
+        assertThatThrownBy(() -> broken.issueAccessToken(subject, session))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MembershipDirectory.memberships");
+        assertThat(issued.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("a role the service does not know never reaches a token, however the platform role is written")
+    void unknownRolesAreDropped() {
+        for (String role : new String[]{"Platform-Admin", " platform-admin", "PLATFORM-ADMIN", "Admin", "owner ",
+                "unknown role", "a".repeat(40)}) {
+            MembershipDirectory single = new InMemoryMembershipDirectory();
+            single.grant(UUID.randomUUID(), subject, role);
+            issued.set(null);
+
+            new SessionTokenIssuerAdapter(fake, single).issueAccessToken(subject, session);
+
+            assertThat(issued.get().tenantId()).as("tenant for role '%s'", role).isNull();
+            assertThat(issued.get().roles()).as("roles for role '%s'", role).isEmpty();
+            assertThat(issued.get().customClaims()).doesNotContainKey("scope");
+        }
     }
 
     @Test

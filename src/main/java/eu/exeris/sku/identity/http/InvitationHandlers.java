@@ -20,7 +20,6 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * Inviting people into the caller's tenant, and accepting an invitation.
@@ -37,7 +36,6 @@ final class InvitationHandlers {
 
     private static final String SUBJECT_NAMESPACE = "eu.exeris.sku.identity/invitation-subject/";
     private static final System.Logger LOG = System.getLogger(InvitationHandlers.class.getName());
-    private static final Pattern ROLE = Pattern.compile("[a-z][a-z0-9-]{0,31}");
     private static final int MAX_EMAIL = 254;
     private static final int MAX_TOKEN = 128;
 
@@ -66,7 +64,7 @@ final class InvitationHandlers {
         UUID tenant = principal.tenantId().orElseThrow(Problem.TENANT_REQUIRED::raise);
         String email = body.string("email", MAX_EMAIL);
         String role = body.string("role", 32);
-        if (!ROLE.matcher(role).matches() || !RoleScopes.issuable(role)
+        if (!RoleScopes.issuable(role)
                 || (RoleScopes.OWNER.equals(role) && !principal.hasRole(RoleScopes.OWNER))) {
             throw Problem.FORBIDDEN.raise();
         }

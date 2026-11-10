@@ -1,8 +1,10 @@
 package eu.exeris.sku.identity.auth;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * The fixed mapping from a tenant role to the scopes an access token carries, and the rule that picks
@@ -21,6 +23,8 @@ public final class RoleScopes {
 
     /** The role of the host's own operators; it is never granted or issued by this service. */
     public static final String PLATFORM_ADMIN = "platform-admin";
+
+    private static final Pattern WELL_FORMED = Pattern.compile("[a-z][a-z0-9-]{0,31}");
 
     private RoleScopes() {
     }
@@ -46,13 +50,20 @@ public final class RoleScopes {
     }
 
     /**
-     * Whether a token may carry the role. The platform role belongs to the host and is never issued.
+     * Whether a role is one this service knows and may issue, grant or invite into: lower-case letters,
+     * digits and hyphens, starting with a letter, at most 32 characters, and not the platform role. The
+     * platform role belongs to the host and is never issued, however it is written: it is compared after
+     * trimming and lower-casing. A role that is not exactly in the known form, such as one with capitals
+     * or surrounding blanks, is unknown and never reaches a token.
      *
-     * @param role a tenant role
-     * @return false for {@link #PLATFORM_ADMIN}
+     * @param role a tenant role; may be null
+     * @return true when a token may carry the role
      */
     public static boolean issuable(String role) {
-        return !PLATFORM_ADMIN.equals(role);
+        if (role == null || !WELL_FORMED.matcher(role).matches()) {
+            return false;
+        }
+        return !PLATFORM_ADMIN.equals(role.strip().toLowerCase(Locale.ROOT));
     }
 
     /**

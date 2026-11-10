@@ -7,6 +7,7 @@ import eu.exeris.sku.identity.auth.Membership;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.auth.RoleScopes;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -18,8 +19,10 @@ import java.util.UUID;
  * Issues the access tokens the session store hands out, naming the tenant, role and scopes the
  * membership directory gives the subject.
  *
- * <p>A membership in the platform role counts toward neither the tenant nor the roles: that role is never
- * issued, so a subject whose only membership is the platform role gets a token that names no tenant.
+ * <p>A membership in the platform role, or in a role this service does not know, counts toward neither the
+ * tenant nor the roles: such a role is never issued, so a subject whose only membership is one of them gets
+ * a token that names no tenant. A directory that returns null instead of a list breaks its contract, and
+ * the token is refused rather than issued without a tenant.
  *
  * <p>The same rule applies at login and at refresh, so a token's tenant never changes between the two. See
  * {@link RoleScopes#activeMembership} for how the tenant is chosen.
@@ -47,8 +50,13 @@ public final class SessionTokenIssuerAdapter implements AccessTokenIssuer {
         TokenIssueRequest.Builder request = TokenIssueRequest.builder()
                 .subjectId(subjectId)
                 .sessionId(sessionId);
+        List<Membership> memberships = directory.memberships(subjectId);
+        if (memberships == null) {
+            throw new IllegalStateException("MembershipDirectory.memberships returned null: it must return an "
+                    + "empty list for a subject with no membership");
+        }
         Optional<Membership> active = RoleScopes.activeMembership(
-                directory.memberships(subjectId).stream().filter(m -> RoleScopes.issuable(m.role())).toList());
+                memberships.stream().filter(m -> RoleScopes.issuable(m.role())).toList());
         if (active.isPresent()) {
             Membership membership = active.get();
             request.tenantId(membership.tenantId().toString()).roles(Set.of(membership.role()));
