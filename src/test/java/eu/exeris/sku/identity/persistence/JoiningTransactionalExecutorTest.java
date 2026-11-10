@@ -144,6 +144,24 @@ class JoiningTransactionalExecutorTest {
     }
 
     @Test
+    @DisplayName("two wrappers over one delegate are two executors: the second is refused inside the first one's unit")
+    void anotherWrapperIsRefused() {
+        JdbcTransactionalExecutor delegate = new JdbcTransactionalExecutor(database);
+        JoiningTransactionalExecutor first = JoiningTransactionalExecutor.wrap(delegate);
+        JoiningTransactionalExecutor second = JoiningTransactionalExecutor.wrap(delegate);
+
+        assertThat(second).isNotSameAs(first);
+        first.inTransaction(() -> {
+            assertThatThrownBy(() -> second.executeManaged(connection -> { }))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("another executor");
+            assertThatThrownBy(() -> second.inTransaction(() -> null))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("another executor");
+            first.executeManaged(connection -> { });
+            return null;
+        });
+    }
+
+    @Test
     @DisplayName("outside a unit every call goes to the delegate, and wrapping twice yields the same executor")
     void transparentOutsideAUnit() throws Exception {
         UUID id = UUID.randomUUID();

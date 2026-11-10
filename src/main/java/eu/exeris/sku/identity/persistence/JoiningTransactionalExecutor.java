@@ -50,8 +50,11 @@ public final class JoiningTransactionalExecutor implements TransactionalExecutor
     }
 
     /**
-     * Wraps an executor. An executor that already joins is returned as it is, so a host and the
-     * composition share one unit scope when both wrap the same executor.
+     * Wraps an executor. An executor that already joins is returned as it is; wrapping the same
+     * delegate twice gives two instances. Only calls through one instance join one another's unit, and a
+     * call through a second instance inside a unit is refused. A host that wants to take part in the
+     * composition's units uses the composition's own instance, or passes an instance it wrapped to the
+     * composition so that both are the same one.
      *
      * @param delegate the executor that opens the transactions
      * @return the joining executor
