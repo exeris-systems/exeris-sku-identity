@@ -13,7 +13,7 @@ Operating contract for AI agents working in this repository.
 
 ## 1. Mission and scope
 
-`exeris-sku-identity` is the Identity and Access Management (IAM) Platform SKU (Tier 3, Service Boundary family): a composition of `service-boundary-core`, `rate-limiting`, `jwt-validation`, `cors-policy`, `audit-trail`, `i18n`, `credential-store`, `session-management`, `mfa-totp`, `federated-login`, `token-issuer` and `invitations`. Licence: `commercial` — Exeris Commercial License 1.1, source-available (ADR-023). It is a proof of concept built against `exeris-kernel` 0.13.0-SNAPSHOT; `README.md` describes what it does and does not do.
+`exeris-sku-identity` is the Identity and Access Management (IAM) Platform SKU (Tier 3, Service Boundary family): a composition of `service-boundary-core`, `rate-limiting`, `jwt-validation`, `cors-policy`, `audit-trail`, `i18n`, `credential-store`, `session-management`, `mfa-totp`, `federated-login`, `token-issuer` and `invitations`. Licence: `commercial` — Exeris Commercial License 1.1, source-available (ADR-023). It is a proof of concept built against `exeris-kernel` 0.13.1; `README.md` describes what it does and does not do.
 
 ## 2. Operating contract and boundaries
 

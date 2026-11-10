@@ -4,7 +4,7 @@ type: roadmap
 visibility: public
 owning-repo: exeris-sku-identity
 status: active
-last-verified: 2026-10-15
+last-verified: 2026-11-10
 ---
 
 # exeris-sku-identity — Roadmap
@@ -23,42 +23,45 @@ Milestones are versions, not dates. Dates appear only on what has shipped; nothi
 
 Tier 3 Platform SKU of the Service Boundary family (HLA; ADR-024, ADR-053, ADR-099). A runnable application that boots the kernel HTTP subsystem and provides Identity and Access Management (IAM) on top of `service-boundary-core`. It composes 12 capabilities: `exeris-caps-service-boundary-core`, `exeris-caps-rate-limiting`, `exeris-caps-jwt-validation`, `exeris-caps-audit-trail`, `exeris-caps-cors-policy`, `exeris-caps-i18n`, `exeris-caps-credential-store`, `exeris-caps-mfa-totp`, `exeris-caps-token-issuer`, `exeris-caps-session-management`, `exeris-caps-invitations`, and `exeris-caps-federated-login`.
 
-The implementation coordinates core authentication and authorization flows: user registration and onboarding, Argon2id password authentication, RFC 6238 TOTP multi-factor authentication, session management with refresh token rotation, EdDSA (Ed25519) token issuance with active JWKS publication, federated identity provider integration, and tenant member invitations.
+The implementation coordinates core authentication and authorization flows: invitation-based onboarding, Argon2id password authentication, RFC 6238 TOTP multi-factor authentication, session management with refresh token rotation, EdDSA (Ed25519) token issuance with JWKS publication, and tenant member invitations. Federated login is composed but exposes no route; the README lists what is not covered.
 
 **Upstream constraints this repo does not own:**
 
 | Constraint | Effect here | Owner |
 | --- | --- | --- |
-| Kernel licence gate (ADR-088, ADR-089) in kernel `0.13.0-SNAPSHOT` | Artefacts stay `0.1.0-SNAPSHOT` until kernel `0.13.0` is released | `exeris-kernel` |
-| Each cap's own 0.1.0 / 0.2.0 milestones | The SKU consumes `[0.1.0,0.2.0)` ranges of composed capabilities | capability repositories |
+| Kernel licence gate (ADR-088, ADR-089) | A process carrying an entitlement does not boot without a licence manifest | `exeris-kernel` |
+| Each cap's own 0.1.0 / 0.2.0 milestones | The capabilities are pinned at `0.1.0-SNAPSHOT` and composed against the contract range `[0.1.0,0.2.0)`; artefacts stay `0.1.0-SNAPSHOT` until they publish 0.1.0 | capability repositories |
 | Kernel `HttpExchange` integration | Ingress dispatch on the kernel HTTP engine | `exeris-kernel` |
-| Substrate driver-swap transparency | Reference kernel SPIs (`TransactionalExecutor`, `HttpClientEngine`) without concrete drivers | `exeris-kernel` |
+| Substrate driver-swap transparency | The library surface names kernel SPIs; only the launcher names a driver | `exeris-kernel` |
 | Composition manifest validation | Deterministic SHA-256 `contentBinding` in `composition.json` | `exeris-sdk`, `exeris-tooling` |
 
 ---
 
 ## 0.1.0 — the code PR
 
-- [ ] Rebase onto the current capabilities APIs (`TransactionalExecutor`-backed capabilities with PostgreSQL, applying each capability's migrations)
-- [ ] Ingress admission through `jwt-validation` with issuer and audience loaded from configuration
-- [ ] Explicit route requirement declarations across all endpoints: public onboarding/login routes vs authenticated management routes
-- [ ] Subject and tenant identifiers resolved strictly from the authenticated principal or validated session state
-- [ ] Parent POM aligned to `eu.exeris:exeris-app-parent:0.10.0`, kernel `0.13.0-SNAPSHOT`, SDK `0.12.0`, tooling `0.10.0`
-- [ ] All capability dependencies on `[0.1.0,0.2.0)` ranges
-- [ ] Password verification using Argon2id with adaptive memory/time parameters
-- [ ] Multi-factor authentication via RFC 6238 TOTP with cryptographic recovery codes
-- [ ] EdDSA (Ed25519) access token issuance with active JWKS publication and rotation
-- [ ] Session management with atomic refresh token rotation and race-tolerant grace windows
-- [ ] Member invitations flow supporting tokenized onboarding and tenant assignment
+The code is imported. Closing 0.1.0 needs a green CI run on JDK 25 and 26 with the licence secret, which also runs `IdentityProcessIT` against a real licence manifest for the first time.
+
+- [x] Capabilities backed by `TransactionalExecutor` with PostgreSQL, and a `migrate` command that applies each capability's migrations in order with a separate privileged connection
+- [x] Ingress admission through `jwt-validation` with issuer and audience loaded from configuration
+- [x] Explicit route requirement declarations across all endpoints: public onboarding/login routes vs authenticated management routes
+- [x] Subject and tenant identifiers resolved strictly from the authenticated principal or validated session state
+- [x] Parent POM aligned to `eu.exeris:exeris-app-parent:0.11.0`, kernel `0.13.1`, SDK `0.13.3`, tooling `0.11.0`
+- [x] Capabilities composed against the contract range `[0.1.0,0.2.0)` in `composition.json`, pinned at `0.1.0-SNAPSHOT` in the POM
+- [ ] POM dependencies on the capabilities move to `[0.1.0,0.2.0)` once the capabilities publish 0.1.0
+- [x] Password verification using Argon2id with adaptive memory/time parameters
+- [x] Multi-factor authentication via RFC 6238 TOTP with cryptographic recovery codes
+- [x] EdDSA (Ed25519) access token issuance with JWKS publication and rotation
+- [x] Session management with atomic refresh token rotation; reuse of a refresh token revokes the session and there is no grace window
+- [x] Member invitations flow supporting tokenized onboarding and tenant assignment
 - [ ] Licence enforcement: `IdentitySkuEntitlement` (id `exeris-sku-identity`) validated against the kernel Phase 0 gate
-- [ ] `composition.json` manifest validated with deterministic SHA-256 content binding passing `CompositionStampAssertion`
-- [ ] Integration tests against PostgreSQL through Testcontainers for every IAM workflow; unit tests with JUnit 5 and AssertJ
+- [x] `composition.json` manifest validated with deterministic SHA-256 content binding passing `CompositionStampAssertion`
+- [x] Integration tests against PostgreSQL through Testcontainers for every IAM workflow; unit tests with JUnit 5 and AssertJ
 
 **Exit gate:** `mvn verify` green on JDK 25 with the Testcontainers suite; `CompositionStampAssertion` passes; end-to-end IAM flows verify onboarding, Argon2id authentication, TOTP MFA, and Ed25519 token issuance.
 
 ## After 0.1.0
 
-The milestones after 0.1.0 are not decided yet. They are added here when they are.
+The milestones after 0.1.0 are not decided yet. They are added here when they are; the README's "Not covered" section lists what no milestone holds yet.
 
 ---
 
