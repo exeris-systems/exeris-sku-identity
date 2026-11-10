@@ -4,6 +4,7 @@ import eu.exeris.kernel.community.security.Argon2idPasswordEncoder;
 import eu.exeris.kernel.core.bootstrap.KernelBootstrap;
 import eu.exeris.kernel.spi.bootstrap.BootstrapSelector;
 import eu.exeris.kernel.spi.context.KernelProviders;
+import eu.exeris.kernel.spi.contract.ExecutionEnvironment;
 import eu.exeris.kernel.spi.http.HttpKernelProviders;
 import eu.exeris.kernel.spi.scheduling.JobScheduler;
 import eu.exeris.sku.identity.IdentityComposition;
@@ -99,9 +100,10 @@ public final class IdentitySkuApplication {
     }
 
     /** The kernel reads its environment from a system property; it must name the one this service was given. */
-    private static void requireSameEnvironment(StartupPlan plan) {
+    static void requireSameEnvironment(StartupPlan plan) {
         String property = System.getProperty("exeris.environment");
-        if (property != null && !property.isBlank() && !property.trim().equals(plan.environment().id())) {
+        if (property != null && !property.isBlank()
+                && !ExecutionEnvironment.fromId(property).filter(plan.environment()::equals).isPresent()) {
             throw new IdentityConfigException(List.of("The system property exeris.environment disagrees with "
                     + StartupPlan.ENVIRONMENT + ": the kernel and this service must run in one environment."));
         }
