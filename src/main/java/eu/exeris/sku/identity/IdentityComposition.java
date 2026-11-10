@@ -26,6 +26,7 @@ import eu.exeris.caps.sessionmanagement.api.SessionPolicy;
 import eu.exeris.caps.tokenissuer.TokenIssuerModule;
 import eu.exeris.caps.tokenissuer.api.JwksPublisher;
 import eu.exeris.caps.tokenissuer.spi.ApiSurfaceRegistryRegistrar;
+import eu.exeris.kernel.spi.http.HttpHandler;
 import eu.exeris.kernel.spi.persistence.TransactionalExecutor;
 import eu.exeris.kernel.spi.scheduling.JobScheduler;
 import eu.exeris.kernel.spi.security.credentials.KernelPasswordEncoder;
@@ -35,6 +36,7 @@ import eu.exeris.sku.identity.auth.DirectoryInvitationAdministrators;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfig;
 import eu.exeris.sku.identity.wiring.DeferredJwtPolicy;
+import eu.exeris.sku.identity.wiring.PeerAddresses;
 import eu.exeris.sku.identity.wiring.SessionRevocationAdapter;
 import eu.exeris.sku.identity.wiring.SessionTokenIssuerAdapter;
 
@@ -161,6 +163,14 @@ public final class IdentityComposition {
         return serviceBoundary.apiSurfaceRegistry();
     }
 
+    /**
+     * The handler the transport calls for every request: the route registry, with the connection's peer
+     * address kept visible to the rate limit and to the handlers.
+     */
+    public HttpHandler httpHandler() {
+        return PeerAddresses.binding(serviceBoundary.apiSurfaceRegistry());
+    }
+
     /** The admission filter chain the token check and the rate limit are attached to. */
     public RequestFilterChain requestFilterChain() {
         return serviceBoundary.requestFilterChain();
@@ -216,7 +226,7 @@ public final class IdentityComposition {
         private JobScheduler jobScheduler;
         private IdentityConfig config;
         private Clock clock = Clock.systemUTC();
-        private PeerAddressSource peerAddress = PeerAddressSource.NONE;
+        private PeerAddressSource peerAddress = PeerAddresses.source();
         private String totpIssuer;
         private final List<RouteContributor> contributors = new ArrayList<>();
 
@@ -284,8 +294,8 @@ public final class IdentityComposition {
         }
 
         /**
-         * Where the connection's peer address comes from, for the rate limit. Without a source no peer
-         * address is known.
+         * Where the connection's peer address comes from, for the rate limit. By default the address bound by
+         * {@link #httpHandler()}.
          */
         public Builder peerAddress(PeerAddressSource source) {
             this.peerAddress = Objects.requireNonNull(source, "source must not be null");
@@ -387,7 +397,8 @@ public final class IdentityComposition {
                     sessions.sessionStore(), sessions.refreshTokenRotation(), sessionTokens,
                     mfa.getTotpFactorRegistry(), mfa.getTotpVerifier(), mfa.getRecoveryCodes(),
                     mfa.getMfaChallenge(),
-                    invitations.invitationService(), membershipDirectory, tokenIssuer.jwksPublisher(), auditSink,
+                    invitations.invitationService(), membershipDirectory, tokenIssuer.jwksPublisher(),
+                    tokenIssuer.signingKeyRotation(), auditSink,
                     i18n.localeResolver(), i18n.translationRegistry());
 
             for (RouteContributor contributor : contributors) {

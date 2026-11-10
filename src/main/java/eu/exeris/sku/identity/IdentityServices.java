@@ -16,6 +16,7 @@ import eu.exeris.caps.sessionmanagement.api.RefreshTokenRotation;
 import eu.exeris.caps.sessionmanagement.api.SessionStore;
 import eu.exeris.caps.sessionmanagement.spi.AccessTokenIssuer;
 import eu.exeris.caps.tokenissuer.api.JwksPublisher;
+import eu.exeris.caps.tokenissuer.api.SigningKeyRotation;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.config.IdentityConfig;
 
@@ -44,6 +45,7 @@ import java.time.Clock;
  * @param invitations           invitations into a tenant
  * @param memberships           where tenant memberships live
  * @param jwks                  the published signing keys
+ * @param signingKeys           rotation and retirement of the signing keys
  * @param audit                 the audit sink every capability records to
  * @param localeResolver        locale selection for fixed messages
  * @param translations          the fixed message set
@@ -65,6 +67,7 @@ public record IdentityServices(
         InvitationService invitations,
         MembershipDirectory memberships,
         JwksPublisher jwks,
+        SigningKeyRotation signingKeys,
         AuditLogSink audit,
         LocaleResolver localeResolver,
         TranslationRegistry translations) {
