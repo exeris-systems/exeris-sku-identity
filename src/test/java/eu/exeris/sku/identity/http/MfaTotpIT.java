@@ -184,6 +184,63 @@ class MfaTotpIT {
     }
 
     @Test
+    @DisplayName("regenerating recovery codes replaces the caller's codes and leaves another subject's valid")
+    void regenerationLeavesOtherSubjectsCodes() {
+        Enrolled alice = enrol();
+        Enrolled bob = enrol();
+        String aliceCode = recoveryCodes(alice).get(0);
+        String bobOld = recoveryCodes(bob).get(0);
+        String bobNew = recoveryCodes(bob).get(0);
+
+        TestExchange bobsOldCode = service.post(BASE + "/mfa/verify",
+                verify(challenge(bob.account()), "recoveryCode", bobOld));
+        TestExchange alices = service.post(BASE + "/mfa/verify",
+                verify(challenge(alice.account()), "recoveryCode", aliceCode));
+        TestExchange bobsNewCode = service.post(BASE + "/mfa/verify",
+                verify(challenge(bob.account()), "recoveryCode", bobNew));
+
+        assertThat(bobsOldCode.code()).as("the regenerated-away code").isEqualTo(401);
+        assertThat(alices.code()).as("another subject's regeneration does not touch these").isEqualTo(200);
+        assertThat(bobsNewCode.code()).isEqualTo(200);
+    }
+
+    private static java.util.List<String> recoveryCodes(Enrolled enrolled) {
+        TestExchange codes = service.send(HttpMethod.POST, BASE + "/mfa/recovery-codes",
+                bearer(enrolled.accessToken()));
+        assertThat(codes.code()).isEqualTo(200);
+        java.util.List<String> result = new java.util.ArrayList<>();
+        json(codes).get("codes").forEach(code -> result.add(code.stringValue()));
+        return result;
+    }
+
+    @Test
+    @DisplayName("enrolment belongs to the caller: another subject cannot confirm it, and beginning one does not replace it")
+    void enrolmentIsOwn() {
+        Account alice = service.account();
+        Account bob = service.account();
+        String aliceToken = service.accessToken(alice);
+        String bobToken = service.accessToken(bob);
+        String aliceSecret = json(service.post(BASE + "/mfa/totp/enrollment", Map.of(), bearer(aliceToken)))
+                .get("secret").stringValue();
+
+        TestExchange bobConfirms = service.post(BASE + "/mfa/totp/enrollment/confirm",
+                Map.of("code", Totp.code(aliceSecret, Instant.now())), bearer(bobToken));
+
+        assertThat(bobConfirms.code()).as(bobConfirms.body()).isEqualTo(409);
+        assertThat(bobConfirms.body()).isEqualTo("{\"error\":\"factor_not_enrolled\"}");
+        assertThat(service.post(BASE + "/login", IdentityHarness.credentials(alice)).code()).isEqualTo(200);
+        assertThat(json(service.post(BASE + "/login", IdentityHarness.credentials(alice)))
+                .has("mfaRequired")).as("alice's factor is not active").isFalse();
+
+        TestExchange bobBegins = service.post(BASE + "/mfa/totp/enrollment", Map.of(), bearer(bobToken));
+        assertThat(bobBegins.code()).isEqualTo(200);
+        TestExchange aliceConfirms = service.post(BASE + "/mfa/totp/enrollment/confirm",
+                Map.of("code", Totp.code(aliceSecret, Instant.now())), bearer(aliceToken));
+
+        assertThat(aliceConfirms.code()).as("bob's begin did not replace alice's secret").isEqualTo(200);
+    }
+
+    @Test
     @DisplayName("recovery codes need an active factor")
     void recoveryCodesNeedAFactor() {
         String token = service.accessToken(service.account());
