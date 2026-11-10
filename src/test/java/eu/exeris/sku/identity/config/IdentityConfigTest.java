@@ -38,6 +38,7 @@ class IdentityConfigTest {
         m.put("EXERIS_TOKEN_ISSUER_KEKS", "k1:" + randomBase64(32));
         m.put("EXERIS_MFA_TOTP_KEKS", "k1:" + randomBase64(32));
         m.put("EXERIS_MFA_TOTP_PEPPER", randomBase64(32));
+        m.put("EXERIS_FEDERATED_LOGIN_STATE_KEYS", "k1:" + randomBase64(32));
         for (int i = 0; i < kv.length; i += 2) {
             if (kv[i + 1] == null) {
                 m.remove(kv[i]);
@@ -80,8 +81,8 @@ class IdentityConfigTest {
                     String message = e.getMessage();
                     assertThat(message).contains("EXERIS_TOKEN_ISSUER_ISSUER", "EXERIS_TOKEN_ISSUER_AUDIENCE",
                             "EXERIS_TOKEN_ISSUER_KEKS", "EXERIS_MFA_TOTP_KEKS", "EXERIS_MFA_TOTP_PEPPER",
-                            "EXERIS_HTTP_PORT");
-                    assertThat(((IdentityConfigException) e).problems()).hasSize(6);
+                            "EXERIS_FEDERATED_LOGIN_STATE_KEYS", "EXERIS_HTTP_PORT");
+                    assertThat(((IdentityConfigException) e).problems()).hasSize(7);
                 });
     }
 

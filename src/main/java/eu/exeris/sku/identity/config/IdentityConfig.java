@@ -55,7 +55,8 @@ import java.util.TreeSet;
  * @param corsOrigins           allowed CORS origins; empty when cross-origin access is off
  * @param credentials           lockout, token and password policies of the credential store
  * @param passwordHashing       Argon2id parameters new password hashes are made with
- * @param capabilityEnvironment the settings the token-issuer and second-factor capabilities read themselves
+ * @param capabilityEnvironment the settings the token-issuer, second-factor and federated-login capabilities
+ *                              read themselves
  */
 public record IdentityConfig(
         Http http,
@@ -111,6 +112,10 @@ public record IdentityConfig(
     static final String MFA_CHALLENGE_TTL = "EXERIS_MFA_TOTP_CHALLENGE_TTL";
     static final String MFA_CHALLENGE_MAX_TTL = "EXERIS_MFA_TOTP_CHALLENGE_MAX_TTL";
 
+    /** Key material read by the federated-login capability, which seals its flow state under it. */
+    static final String FEDERATED_KEYS = "EXERIS_FEDERATED_LOGIN_STATE_KEYS";
+    static final String FEDERATED_KEYS_FILE = "EXERIS_FEDERATED_LOGIN_STATE_KEYS_FILE";
+
     private static final String TOKEN_ISSUER_PREFIX = "EXERIS_TOKEN_ISSUER_";
     private static final String MFA_PREFIX = "EXERIS_MFA_TOTP_";
 
@@ -122,6 +127,8 @@ public record IdentityConfig(
 
     private static final Set<String> MFA_KEYS = Set.of(
             MFA_PEPPER, MFA_PEPPER_FILE, MFA_KEKS, MFA_KEKS_FILE, MFA_CHALLENGE_TTL, MFA_CHALLENGE_MAX_TTL);
+
+    private static final Set<String> FEDERATED_LOGIN_KEYS = Set.of(FEDERATED_KEYS, FEDERATED_KEYS_FILE);
 
     /** The rate-limited public credential routes, by group. Every route is a {@code METHOD /path} pair. */
     private static final List<GroupDefault> GROUP_DEFAULTS = List.of(
@@ -339,6 +346,7 @@ public record IdentityConfig(
         in.secret(TOKEN_ISSUER_KEKS, TOKEN_ISSUER_KEKS_FILE, "the key-encryption keyring of the signing keys");
         in.secret(MFA_KEKS, MFA_KEKS_FILE, "the key-encryption keyring of the TOTP secrets");
         in.secret(MFA_PEPPER, MFA_PEPPER_FILE, "the pepper of the recovery-code and challenge hashes");
+        in.secret(FEDERATED_KEYS, FEDERATED_KEYS_FILE, "the keyring that seals federated-login flow state");
         Mfa mfa = mfa(in);
 
         Jwt jwt = jwt(in, tokenIssuer);
@@ -480,7 +488,7 @@ public record IdentityConfig(
         Map<String, String> subset = new TreeMap<>();
         for (Map.Entry<String, String> entry : values.entrySet()) {
             String key = entry.getKey();
-            if ((TOKEN_ISSUER_KEYS.contains(key) || MFA_KEYS.contains(key))
+            if ((TOKEN_ISSUER_KEYS.contains(key) || MFA_KEYS.contains(key) || FEDERATED_LOGIN_KEYS.contains(key))
                     && entry.getValue() != null && !entry.getValue().isBlank()) {
                 subset.put(key, entry.getValue().trim());
             }
@@ -499,6 +507,7 @@ public record IdentityConfig(
                 ARGON2_PARALLELISM));
         keys.addAll(TOKEN_ISSUER_KEYS);
         keys.addAll(MFA_KEYS);
+        keys.addAll(FEDERATED_LOGIN_KEYS);
         for (GroupDefault d : GROUP_DEFAULTS) {
             keys.add(d.key("CAPACITY"));
             keys.add(d.key("REFILL_SECONDS"));
