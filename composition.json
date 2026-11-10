@@ -1,0 +1,580 @@
+{
+  "schemaVersion" : 2,
+  "stamp" : {
+    "validated" : true,
+    "compositionVersion" : "0.1.0",
+    "contentBinding" : "sha256:b4200753879e49e66e598e4f299a83d411b03c462df0502a4619bb44845a03c0"
+  },
+  "modules" : [
+    {
+      "name" : "AuditTrailModule",
+      "packageName" : "eu.exeris.caps.audittrail",
+      "qualifiedName" : "eu.exeris.caps.audittrail.AuditTrailModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [ ],
+        "lifecycleOwner" : "eu.exeris.caps.audittrail.AuditTrailModule"
+      }
+    },
+    {
+      "name" : "CorsPolicyModule",
+      "packageName" : "eu.exeris.caps.corspolicy",
+      "qualifiedName" : "eu.exeris.caps.corspolicy.CorsPolicyModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.corspolicy.api.CorsPolicy",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [ ]
+      }
+    },
+    {
+      "name" : "CredentialStoreModule",
+      "packageName" : "eu.exeris.caps.credentialstore",
+      "qualifiedName" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.credentialstore.api.CredentialStore",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.credentialstore.api.AccountVerification",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.credentialstore.api.CredentialRecovery",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.credentialstore.api.CredentialProvisioning",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.caps.credentialstore.spi.NotificationDispatcher",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.security.credentials.KernelPasswordEncoder",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.credentialstore.spi.SessionStore",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.credentialstore.CredentialStoreModule"
+      }
+    },
+    {
+      "name" : "FederatedLoginModule",
+      "packageName" : "eu.exeris.caps.federatedlogin",
+      "qualifiedName" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.federatedlogin.api.FederatedLoginFlow",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.federatedlogin.api.ExternalIdentityLink",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.federatedlogin.api.FederationProviderRegistry",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.caps.federatedlogin.spi.OutboundCredentialStore",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.http.HttpClientEngine",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.security.identity.TokenValidator",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.federatedlogin.FederatedLoginModule"
+      }
+    },
+    {
+      "name" : "I18nModule",
+      "packageName" : "eu.exeris.caps.i18n",
+      "qualifiedName" : "eu.exeris.caps.i18n.I18nModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.i18n.api.LocaleResolver",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.i18n.api.TranslationRegistry",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [ ],
+        "lifecycleOwner" : "eu.exeris.caps.i18n.I18nModule"
+      }
+    },
+    {
+      "name" : "InvitationsModule",
+      "packageName" : "eu.exeris.caps.invitations",
+      "qualifiedName" : "eu.exeris.caps.invitations.InvitationsModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.invitations.api.InvitationService",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.invitations.InvitationsModule"
+      }
+    },
+    {
+      "name" : "JwtValidationModule",
+      "packageName" : "eu.exeris.caps.jwt",
+      "qualifiedName" : "eu.exeris.caps.jwt.JwtValidationModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.jwt.api.JwtAdmissionPolicy",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.jwt.JwtValidationModule"
+      }
+    },
+    {
+      "name" : "MfaTotpModule",
+      "packageName" : "eu.exeris.caps.mfatotp",
+      "qualifiedName" : "eu.exeris.caps.mfatotp.MfaTotpModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.mfatotp.api.TotpFactorRegistry",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.mfatotp.api.TotpVerifier",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.mfatotp.api.RecoveryCodes",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.mfatotp.api.MfaChallenge",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.mfatotp.MfaTotpModule"
+      }
+    },
+    {
+      "name" : "RateLimitModule",
+      "packageName" : "eu.exeris.caps.ratelimit",
+      "qualifiedName" : "eu.exeris.caps.ratelimit.RateLimitModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.ratelimit.api.RateLimitPolicy",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.ratelimit.RateLimitModule"
+      }
+    },
+    {
+      "name" : "ServiceBoundaryCoreModule",
+      "packageName" : "eu.exeris.caps.serviceboundarycore",
+      "qualifiedName" : "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.ApiSurfaceRegistry",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.ServiceLifecycleHooks",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.RequestContext",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [ ],
+        "lifecycleOwner" : "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule"
+      }
+    },
+    {
+      "name" : "SessionManagementModule",
+      "packageName" : "eu.exeris.caps.sessionmanagement",
+      "qualifiedName" : "eu.exeris.caps.sessionmanagement.SessionManagementModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.sessionmanagement.api.SessionStore",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.sessionmanagement.api.RefreshTokenRotation",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.sessionmanagement.spi.AccessTokenIssuer",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.sessionmanagement.SessionManagementModule"
+      }
+    },
+    {
+      "name" : "TokenIssuerModule",
+      "packageName" : "eu.exeris.caps.tokenissuer",
+      "qualifiedName" : "eu.exeris.caps.tokenissuer.TokenIssuerModule",
+      "module" : {
+        "provides" : [
+          {
+            "service" : "eu.exeris.caps.tokenissuer.api.AccessTokenIssuer",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.tokenissuer.api.JwksPublisher",
+            "version" : "0.1.0"
+          },
+          {
+            "service" : "eu.exeris.caps.tokenissuer.api.SigningKeyRotation",
+            "version" : "0.1.0"
+          }
+        ],
+        "requires" : [
+          {
+            "service" : "eu.exeris.caps.serviceboundarycore.api.ApiSurfaceRegistry",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.kernel.spi.scheduling.JobScheduler",
+            "optional" : true
+          },
+          {
+            "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+            "versionRange" : "[0.1.0,0.2.0)",
+            "optional" : true
+          }
+        ],
+        "lifecycleOwner" : "eu.exeris.caps.tokenissuer.TokenIssuerModule"
+      }
+    }
+  ],
+  "resolutions" : [
+    {
+      "module" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.audittrail.AuditTrailModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "service" : "eu.exeris.caps.credentialstore.spi.NotificationDispatcher",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "service" : "eu.exeris.caps.credentialstore.spi.SessionStore",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.credentialstore.CredentialStoreModule",
+      "service" : "eu.exeris.kernel.spi.security.credentials.KernelPasswordEncoder",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.audittrail.AuditTrailModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "service" : "eu.exeris.caps.federatedlogin.spi.OutboundCredentialStore",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "service" : "eu.exeris.kernel.spi.http.HttpClientEngine",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+      "service" : "eu.exeris.kernel.spi.security.identity.TokenValidator",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.invitations.InvitationsModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.jwt.JwtValidationModule",
+      "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.mfatotp.MfaTotpModule",
+      "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.audittrail.AuditTrailModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.mfatotp.MfaTotpModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.ratelimit.RateLimitModule",
+      "service" : "eu.exeris.caps.serviceboundarycore.api.RequestFilterChain",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.sessionmanagement.SessionManagementModule",
+      "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.audittrail.AuditTrailModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.sessionmanagement.SessionManagementModule",
+      "service" : "eu.exeris.caps.sessionmanagement.spi.AccessTokenIssuer",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.sessionmanagement.SessionManagementModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.tokenissuer.TokenIssuerModule",
+      "service" : "eu.exeris.caps.audittrail.api.AuditLogSink",
+      "versionRange" : "[0.1.0,0.2.0)",
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.audittrail.AuditTrailModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.tokenissuer.TokenIssuerModule",
+      "service" : "eu.exeris.caps.serviceboundarycore.api.ApiSurfaceRegistry",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : true,
+      "providers" : [
+        "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule"
+      ]
+    },
+    {
+      "module" : "eu.exeris.caps.tokenissuer.TokenIssuerModule",
+      "service" : "eu.exeris.kernel.spi.persistence.TransactionalExecutor",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    },
+    {
+      "module" : "eu.exeris.caps.tokenissuer.TokenIssuerModule",
+      "service" : "eu.exeris.kernel.spi.scheduling.JobScheduler",
+      "versionRange" : null,
+      "optional" : true,
+      "satisfied" : false,
+      "providers" : [ ]
+    }
+  ],
+  "initOrder" : [
+    "eu.exeris.caps.audittrail.AuditTrailModule",
+    "eu.exeris.caps.corspolicy.CorsPolicyModule",
+    "eu.exeris.caps.credentialstore.CredentialStoreModule",
+    "eu.exeris.caps.federatedlogin.FederatedLoginModule",
+    "eu.exeris.caps.i18n.I18nModule",
+    "eu.exeris.caps.invitations.InvitationsModule",
+    "eu.exeris.caps.serviceboundarycore.ServiceBoundaryCoreModule",
+    "eu.exeris.caps.jwt.JwtValidationModule",
+    "eu.exeris.caps.mfatotp.MfaTotpModule",
+    "eu.exeris.caps.ratelimit.RateLimitModule",
+    "eu.exeris.caps.sessionmanagement.SessionManagementModule",
+    "eu.exeris.caps.tokenissuer.TokenIssuerModule"
+  ],
+  "warnings" : [
+    "module eu.exeris.caps.credentialstore.CredentialStoreModule @Requires service eu.exeris.caps.credentialstore.spi.NotificationDispatcher version [0.1.0,0.2.0) but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.credentialstore.CredentialStoreModule @Requires service eu.exeris.caps.credentialstore.spi.SessionStore version [0.1.0,0.2.0) but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.credentialstore.CredentialStoreModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.credentialstore.CredentialStoreModule @Requires service eu.exeris.kernel.spi.security.credentials.KernelPasswordEncoder but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.federatedlogin.FederatedLoginModule @Requires service eu.exeris.caps.federatedlogin.spi.OutboundCredentialStore version [0.1.0,0.2.0) but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.federatedlogin.FederatedLoginModule @Requires service eu.exeris.kernel.spi.http.HttpClientEngine but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.federatedlogin.FederatedLoginModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.federatedlogin.FederatedLoginModule @Requires service eu.exeris.kernel.spi.security.identity.TokenValidator but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.invitations.InvitationsModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.mfatotp.MfaTotpModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.sessionmanagement.SessionManagementModule @Requires service eu.exeris.caps.sessionmanagement.spi.AccessTokenIssuer version [0.1.0,0.2.0) but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.sessionmanagement.SessionManagementModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.tokenissuer.TokenIssuerModule @Requires service eu.exeris.kernel.spi.persistence.TransactionalExecutor but no @CapabilityModule provides it (optional — skipped)",
+    "module eu.exeris.caps.tokenissuer.TokenIssuerModule @Requires service eu.exeris.kernel.spi.scheduling.JobScheduler but no @CapabilityModule provides it (optional — skipped)"
+  ]
+}
