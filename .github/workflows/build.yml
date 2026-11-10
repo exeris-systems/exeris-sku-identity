@@ -122,7 +122,7 @@ jobs:
           done
 
       # The kernel refuses to boot a process that carries an EntitlementRequirement without a licence
-      # manifest, in every environment. The process test reads EXERIS_LICENSE_MANIFEST_PATH and fails
+      # manifest, in every environment. The process test reads EXERIS_DEV_LICENSE_MANIFEST_PATH, passes it to the service it starts, and fails
       # with a clear message when it is unset, so this step only warns: a run without the secret (a fork,
       # a bot-opened pull request) reaches that failure by design rather than skipping the test.
       - name: Provide the licence manifest
@@ -136,7 +136,7 @@ jobs:
           MANIFEST="$RUNNER_TEMP/license-manifest.json"
           umask 077
           printf '%s' "${EXERIS_DEV_LICENSE_MANIFEST}" > "$MANIFEST"
-          echo "EXERIS_LICENSE_MANIFEST_PATH=$MANIFEST" >> "$GITHUB_ENV"
+          echo "EXERIS_DEV_LICENSE_MANIFEST_PATH=$MANIFEST" >> "$GITHUB_ENV"
 
       # Docker is available on ubuntu-latest, which the Testcontainers suites need.
       - name: mvn verify

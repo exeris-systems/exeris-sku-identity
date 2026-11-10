@@ -20,8 +20,14 @@ import java.util.concurrent.TimeUnit;
  */
 public final class LaunchedProcess implements AutoCloseable {
 
-    /** The variable naming the licence manifest the kernel verifies. */
+    /** The variable naming the licence manifest the kernel verifies; set only on a launched process. */
     public static final String LICENCE_VARIABLE = "EXERIS_LICENSE_MANIFEST_PATH";
+
+    /**
+     * Where a test run is told the developer licence is. It is a name of its own so that the test JVM,
+     * whose in-process tests of the licence gate need a kernel with no manifest, does not see one.
+     */
+    public static final String DEVELOPER_LICENCE_VARIABLE = "EXERIS_DEV_LICENSE_MANIFEST_PATH";
 
     private final Process process;
     private final Path log;

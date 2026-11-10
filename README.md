@@ -77,7 +77,7 @@ mvn verify                              # needs Docker for the PostgreSQL integr
 mvn verify -DexcludedGroups=kernel-boot # without a licence manifest
 ```
 
-The tests tagged `kernel-boot` boot the real kernel, which refuses to start without a licence manifest entitling `exeris-sku-identity` and its nine commercial capabilities. They read the manifest path from `EXERIS_LICENSE_MANIFEST_PATH` and fail with a message when it is unset. CI writes the manifest from the organisation secret `EXERIS_DEV_LICENSE_MANIFEST`.
+The tests tagged `kernel-boot` boot the real kernel, which refuses to start without a licence manifest entitling `exeris-sku-identity` and its nine commercial capabilities. They read the manifest path from `EXERIS_DEV_LICENSE_MANIFEST_PATH`, hand it to the service they start as `EXERIS_LICENSE_MANIFEST_PATH`, and fail with a message when it is unset. CI writes the manifest from the organisation secret `EXERIS_DEV_LICENSE_MANIFEST`.
 
 ## Documentation
 

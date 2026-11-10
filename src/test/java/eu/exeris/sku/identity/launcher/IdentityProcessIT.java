@@ -66,9 +66,9 @@ class IdentityProcessIT {
 
     @BeforeAll
     static void startService() throws Exception {
-        String manifest = System.getenv(LaunchedProcess.LICENCE_VARIABLE);
+        String manifest = System.getenv(LaunchedProcess.DEVELOPER_LICENCE_VARIABLE);
         if (manifest == null || manifest.isBlank()) {
-            throw new AssertionError(LaunchedProcess.LICENCE_VARIABLE + " is not set: a developer licence "
+            throw new AssertionError(LaunchedProcess.DEVELOPER_LICENCE_VARIABLE + " is not set: a developer licence "
                     + "entitling exeris-sku-identity and its nine commercial capabilities is required to boot "
                     + "the kernel");
         }
