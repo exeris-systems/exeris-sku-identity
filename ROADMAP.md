@@ -39,7 +39,7 @@ The implementation coordinates core authentication and authorization flows: invi
 
 ## 0.1.0 — the code PR
 
-The code is imported. Closing 0.1.0 needs a green CI run on JDK 25 and 26 with the licence secret, which also runs `IdentityProcessIT` against a real licence manifest for the first time.
+The code is imported. CI runs the suite on JDK 25 and 26, including `IdentityProcessIT`, which starts the service on the kernel under a developer licence.
 
 - [x] Capabilities backed by `TransactionalExecutor` with PostgreSQL, and a `migrate` command that applies each capability's migrations in order with a separate privileged connection
 - [x] Ingress admission through `jwt-validation` with issuer and audience loaded from configuration
@@ -53,7 +53,7 @@ The code is imported. Closing 0.1.0 needs a green CI run on JDK 25 and 26 with t
 - [x] EdDSA (Ed25519) access token issuance with JWKS publication and rotation
 - [x] Session management with atomic refresh token rotation; reuse of a refresh token revokes the session and there is no grace window
 - [x] Member invitations flow supporting tokenized onboarding and tenant assignment; the token is delivered through the host's `InvitationDelivery` and never returned to the inviter
-- [ ] Licence enforcement: `IdentitySkuEntitlement` (id `exeris-sku-identity`) validated against the kernel Phase 0 gate
+- [x] Licence enforcement: `IdentitySkuEntitlement` (id `exeris-sku-identity`) validated against the kernel Phase 0 gate
 - [x] `composition.json` manifest validated with deterministic SHA-256 content binding passing `CompositionStampAssertion`
 - [x] Integration tests against PostgreSQL through Testcontainers for every IAM workflow; unit tests with JUnit 5 and AssertJ
 
