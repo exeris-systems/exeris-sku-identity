@@ -26,7 +26,8 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
 
 # JVM options are the operator's: set JAVA_OPTS. No collector or heap size is baked in, because no
 # workload-profiling pass has been run for this SKU. Native access is what the kernel's off-heap memory needs.
-# The default command serves; `migrate` applies the schema with the privileged database settings.
+# The default command serves; `migrate` applies the schema with the privileged database settings;
+# `bootstrap-owner` creates the first account once the schema is migrated.
 ENV JAVA_OPTS=""
 
 ENTRYPOINT ["sh", "-c", "exec java --enable-native-access=ALL-UNNAMED $JAVA_OPTS -jar app.jar \"$@\"", "--"]

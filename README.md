@@ -48,7 +48,7 @@ Joining a further tenant with an existing account (an invitation to an address t
 
 ## Running it
 
-The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplication` with two commands: `serve` (the default) and `migrate`.
+The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplication` with three commands: `serve` (the default), `migrate` and `bootstrap-owner`.
 
 - **Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that uses the same key names; the environment wins. Every problem is reported at once and the process exits with status 78 before the kernel starts. The environment must be declared.
 - **Required** secrets and names: `EXERIS_TOKEN_ISSUER_ISSUER`, `EXERIS_TOKEN_ISSUER_AUDIENCE`, a key-encryption keyring for each of the token issuer (`EXERIS_TOKEN_ISSUER_KEKS`), TOTP (`EXERIS_MFA_TOTP_KEKS`) and federated-login state (`EXERIS_FEDERATED_LOGIN_STATE_KEYS`), `EXERIS_MFA_TOTP_PEPPER`, and `EXERIS_DATABASE_URL`, `_USER` and `_PASSWORD`. Each secret also has a `_FILE` form. The remaining keys cover HTTP limits, token and MFA lifetimes, rate-limit groups, trusted proxies, credential policy and Argon2id parameters.
@@ -58,6 +58,37 @@ The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplicati
 - **Host parts and the database:** a host part that writes to the service's database from inside a request writes through the executor that joins the service's transactions, so that its write commits and rolls back with the invitation or the account. A part named to the launcher is created through its public no-argument constructor before the kernel boots and receives that executor by implementing `eu.exeris.sku.identity.auth.JoinsServiceTransactions`: the launcher hands it over once, after the composition is built and before any job runs or any request is admitted. A host that embeds the library reads it from `IdentityComposition.transactionalExecutor()`. A write through any other executor is not part of the transaction: on the connection the request already holds it is refused and rolls the whole transaction back, and under another storage context it commits on its own connection and survives a rollback. Because the executor retries a transaction after a serialization failure or a deadlock, `InvitationDelivery.deliver` can run more than once for one request with a different token each time, and only the token of the attempt that commits opens anything; it runs while the transaction holds a connection, so it returns promptly.
 - **Row-level security** is switched on for the kernel's persistence in every environment, because the invitations table is isolated by the tenant the kernel publishes for each transaction.
 - **Container:** `docker build -t exeris-sku-identity .` after `mvn package`.
+
+### First account
+
+A fresh installation has no account, no self sign-up and no administrative route, so nobody could sign in or hold `invitations:write`. `bootstrap-owner` creates the first account: verified, able to sign in at once, through the credential store's `CredentialProvisioning`. It runs once against a migrated database, never starts the HTTP service and exits.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `EXERIS_IDENTITY_BOOTSTRAP_OWNER_EMAIL` | yes | the account's address |
+| `EXERIS_IDENTITY_BOOTSTRAP_OWNER_PASSWORD_FILE` | yes | path of a file holding the password |
+| `EXERIS_IDENTITY_BOOTSTRAP_OWNER_TENANT` | when a membership directory is configured; refused otherwise | UUID of the tenant the account owns |
+| `EXERIS_IDENTITY_BOOTSTRAP_OWNER_PASSWORD` | never | refused if set: a password is not read from the environment or from an argument |
+
+It needs everything `serve` needs (the identity configuration, `EXERIS_ENVIRONMENT`, `EXERIS_DATABASE_*` and the host parts) and the same service role, which must be neither a superuser nor `BYPASSRLS`. Any argument after the command is a usage error.
+
+- **The password file** is read as strict UTF-8, trailing line breaks are removed and the rest is the password, inner whitespace included. Its length must lie in the credential policy's window. On a filesystem that reports POSIX permissions only the owner may have access (mode `0400` or `0600`); mounted secrets need `defaultMode: 0400` or the equivalent. Where permissions cannot be checked a warning says so. The content is held in a character array that is zeroed after use.
+- **Refusals** happen before the kernel boots and change nothing: incomplete or unusable configuration (all problems are listed together), a password outside the policy, a database that is not migrated for the service role, or an account that already exists. Two runs started together create at most one account.
+- **The kernel boots persistence and scheduling only**, no listener, so the licence manifest (`EXERIS_LICENSE_MANIFEST_PATH`) is required as for `serve`; without one a production-class environment ends with status 70 and no account.
+- **Membership.** This service keeps no membership table; tenant membership and roles belong to the host's `MembershipDirectory`. With a directory configured, the account is granted `owner` in the configured tenant inside the same transaction as the account, so a failing grant leaves no account. The tenant must already mean something to the host. With no directory configured (outside production-class environments only), the account is created and belongs to no tenant: its tokens name no tenant and carry no role and no scope, so it cannot issue an invitation and nobody can be invited. The operator then records the owner role for that subject (its id is logged) in the host's membership store, and the owner signs in again to obtain a token that names the tenant.
+- **Nothing secret is logged**: not the password, the file's content, the database password or the address; no token is issued.
+
+| Status | Meaning |
+|---|---|
+| 0 | the account was created |
+| 64 | the command line was not understood |
+| 65 | the schema is not migrated for the service role |
+| 69 | the database cannot be reached |
+| 70 | the kernel did not boot or the transaction failed; nothing was committed |
+| 73 | an account already exists; nothing was changed |
+| 78 | the configuration cannot be used |
+
+The audit event of the creation goes to the in-memory audit sink and is lost when the command exits. Not covered: creating the tenant in the host, a second owner, resetting the bootstrap, password reset and second-factor enrolment for the owner.
 
 Embedding is through `IdentityComposition`: the host passes its strict `ServiceBoundaryCoreModule`, a `TransactionalExecutor`, a `KernelPasswordEncoder`, a `NotificationDispatcher`, an `InvitationDelivery`, a `MembershipDirectory` and a `JobScheduler`, adds its own routes, and calls `start()`, which freezes the registry. Only the launcher names a driver class, but the artefact depends on `exeris-kernel-community` at compile scope for the launcher's Argon2id encoder; an embedding host that supplies its own drivers excludes it.
 
