@@ -247,10 +247,14 @@ public final class IdentityComposition {
      * interrupted, not killed: a drain that ignores the interrupt keeps the stop until it returns, and is
      * never running when its capability's {@code terminate} is called.
      *
-     * @param drainTimeout the time all the capabilities together may take to drain in-flight work
+     * @param drainTimeout the time all the capabilities together may take to drain in-flight work; a
+     *        negative duration, of whatever size, is a budget that is already used up
+     * @throws NullPointerException if {@code drainTimeout} is {@code null}, before the composition changes
+     *         state and before any capability is drained or terminated
      * @throws Error the first {@code Error} a drain or a terminate threw, after all have been attempted
      */
     public synchronized void stop(Duration drainTimeout) {
+        Objects.requireNonNull(drainTimeout, "drainTimeout");
         if (state == State.BUILT) {
             state = State.STOPPED;
             return;
@@ -369,8 +373,8 @@ public final class IdentityComposition {
     private static long nanos(Duration budget) {
         try {
             return Math.max(0, budget.toNanos());
-        } catch (ArithmeticException tooLong) {
-            return Long.MAX_VALUE / 4;
+        } catch (ArithmeticException outOfRange) {
+            return budget.isNegative() ? 0 : Long.MAX_VALUE / 4;
         }
     }
 
