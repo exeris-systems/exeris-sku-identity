@@ -79,19 +79,18 @@ public final class IdentitySkuApplication {
             System.exit(EXIT_USAGE);
             return;
         }
-        if (command.equals("bootstrap-owner")) {
-            // Exits unconditionally: a kernel thread must not keep a finished one-shot command alive.
-            System.exit(bootstrapOwner(System.getenv()));
-            return;
-        }
         int status;
         try {
-            status = command.equals("migrate") ? migrate(System.getenv()) : serve(System.getenv());
+            status = switch (command) {
+                case "migrate" -> migrate(System.getenv());
+                case "bootstrap-owner" -> bootstrapOwner(System.getenv());
+                default -> serve(System.getenv());
+            };
         } catch (VirtualMachineError fatal) {
             haltAfter(fatal);
             return;
         }
-        // Exits unconditionally, as bootstrap-owner does: the kernel's transport threads are not daemons, so
+        // Exits unconditionally, for every command: the kernel's transport threads are not daemons, so
         // a main that merely returned would leave the process alive if any of them outlived the kernel's
         // stop. When a termination signal started the shutdown, exit waits for it and the signal's own
         // status (128 + signal) is the one the process reports. No shutdown hook waits for this thread.
@@ -133,7 +132,29 @@ public final class IdentitySkuApplication {
 
     /** Creates the first verified account; returns the process exit status. */
     static int bootstrapOwner(Map<String, String> environment) {
-        return BootstrapOwnerCommand.run(environment);
+        return completing(() -> BootstrapOwnerCommand.run(environment),
+                "The owner bootstrap did not complete, nothing was created ({0})");
+    }
+
+    /**
+     * Runs a command to its exit status so that no ending is an uncaught exception. Anything other than a
+     * fatal VM error that the command did not handle is the not-completed status with one ERROR line naming
+     * only its class, because its message is not ours to print. A {@link VirtualMachineError} is rethrown for
+     * {@link #main} to end the process.
+     *
+     * @param command the command; returns its exit status
+     * @param failureLine the log line, with the class name as argument {@code {0}}
+     * @return the exit status
+     */
+    static int completing(java.util.function.IntSupplier command, String failureLine) {
+        try {
+            return command.getAsInt();
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (RuntimeException | Error unexpected) {
+            LOG.log(System.Logger.Level.ERROR, failureLine, unexpected.getClass().getName());
+            return EXIT_NOT_COMPLETED;
+        }
     }
 
     /**
@@ -142,14 +163,9 @@ public final class IdentitySkuApplication {
      * kernel did not boot or the service failed at any point.
      */
     static int serve(Map<String, String> environment) {
-        try {
-            return serveChecked(environment);
-        } catch (VirtualMachineError fatal) {
-            throw fatal;
-        } catch (RuntimeException | Error unexpected) {
-            LOG.log(System.Logger.Level.ERROR, "Identity could not start ({0})", unexpected.getClass().getName());
-            return EXIT_NOT_COMPLETED;
-        }
+        // A class that cannot be loaded or initialised, or any failure no step expected, is a start that
+        // did not complete.
+        return completing(() -> serveChecked(environment), "Identity could not start ({0})");
     }
 
     private static int serveChecked(Map<String, String> environment) {
