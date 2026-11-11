@@ -237,9 +237,11 @@ public final class IdentitySkuApplication {
 
         // The hook never waits for the thread that exits the process: it stops the service, which it waits
         // for only when the callback's thread is already stopping it, and releases the latch, which is all
-        // the callback is waiting for.
+        // the callback is waiting for. Its notice goes straight to the standard error: the logging
+        // framework's own shutdown hook runs at the same time as this one and removes the log handlers, so a
+        // record published from here can be dropped, while nothing closes the standard error stream.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LOG.log(System.Logger.Level.INFO, "Shutdown signal received, draining");
+            System.err.println("Shutdown signal received, draining");
             stop.stop();
             shutdown.countDown();
         }, "identity-shutdown"));
