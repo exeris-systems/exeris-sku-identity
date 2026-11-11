@@ -564,7 +564,11 @@ class IdentityCompositionDrainBudgetTest {
                     Thread.interrupted();
                 }
                 for (Cap cap : fixture.caps) {
-                    if (cap.flagSeenByDrain.contains(true) && !cap.name.equals("D")) {
+                    // A later drain's own watchdog may fire inside a slice of a few microseconds, so only a
+                    // drain with a slice that no scheduling delay explains can show a leak.
+                    if (!cap.name.equals("D") && !cap.slices.isEmpty()
+                            && cap.slices.get(0).compareTo(Duration.ofMillis(2)) >= 0
+                            && cap.flagSeenByDrain.contains(true)) {
                         violations.add("round " + round + ": drain " + cap.name + " saw an interrupt");
                     }
                     if (cap.flagSeenByTerminate.contains(true)) {
@@ -581,6 +585,30 @@ class IdentityCompositionDrainBudgetTest {
 
         assertThat(ran.thrown()).isNull();
         assertThat(violations).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Drains that each block for 100 ms inside a 5 s budget are not interrupted by the watchdog of an earlier one: every drain completes its wait and sees no interrupt")
+    void earlierWatchdogsDoNotInterruptLaterDrains() throws Exception {
+        for (int round = 0; round < 20; round++) {
+            Fixture fixture = new Fixture();
+            AtomicBoolean interrupted = new AtomicBoolean();
+            fixture.caps.forEach(cap -> cap.onDrain = () -> {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    interrupted.set(true);
+                    throw e;
+                }
+            });
+
+            Ran ran = stopped(fixture, Duration.ofSeconds(5), false);
+
+            assertThat(ran.thrown()).isNull();
+            assertThat(interrupted).isFalse();
+            fixture.caps.forEach(cap -> assertThat(cap.flagSeenByDrain).as(cap.name).containsExactly(false));
+            assertThat(ran.flagAfter()).isFalse();
+        }
     }
 
     @Test
