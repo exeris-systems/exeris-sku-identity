@@ -399,7 +399,6 @@ class ServiceStopContractTest {
     /** A rule of the documented contract that the implementation does not keep; skipped unless asked for. */
     @org.junit.jupiter.api.Nested
     @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     class KnownDefects {
 
         @Test

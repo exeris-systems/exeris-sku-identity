@@ -1,5 +1,6 @@
 package eu.exeris.sku.identity.launcher;
 
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -40,12 +41,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *       see a performer that is not yet set. An action must still not hand the call to another thread and
  *       wait for that thread.</li>
  *   <li>The withdrawal runs first, then the composition's stop. A failure of the first does not skip the
- *       second; the first failure is the one reported and a later one is attached to it as suppressed.
+ *       second; the first failure is the one reported and a later one is attached to it as suppressed,
+ *       except that a {@link VirtualMachineError} takes precedence over any other failure.
  *       A throwing action still releases every waiter, because the latch is released in a
  *       {@code finally}.</li>
  *   <li>The failure of the actions is returned to exactly one caller, the one that performed them; every
  *       other caller gets {@code null}. A {@link VirtualMachineError} is rethrown to the performing caller
- *       after the waiters are released.</li>
+ *       after both actions have run and the waiters are released.</li>
  *   <li>A stop requested before the composition is admitted leaves it unstarted: {@link #admit} then returns
  *       {@code false} and registers nothing. A stop that wins after the admission but before the composition
  *       starts is ordered against the start by the composition's own state, see
@@ -91,12 +93,15 @@ final class ServiceStop {
      * Registers the action that stops the composition, once.
      *
      * @param stopComposition the action that drains and terminates the composition; it must be safe to run
-     *                        before the composition has started
+     *                        before the composition has started; never {@code null}
      * @return {@code false} when a stop has already begun: nothing is registered and the composition must
      *         not be started
+     * @throws NullPointerException  when the action is {@code null}; nothing is registered, so a real action
+     *                               can still be admitted
      * @throws IllegalStateException when an action was already admitted
      */
     boolean admit(Runnable stopComposition) {
+        Objects.requireNonNull(stopComposition, "stopComposition");
         Open admitted = new Open(stopComposition);
         while (true) {
             State current = state.get();
@@ -152,17 +157,27 @@ final class ServiceStop {
             state.set(new Stopped());
             stopped.countDown();
         }
+        if (failure instanceof VirtualMachineError fatal) {
+            throw fatal;
+        }
         return failure;
     }
 
+    /**
+     * Runs one action and folds its failure into {@code earlier}: the first failure is kept and a later one
+     * is suppressed onto it, except that a {@link VirtualMachineError} takes the first place and carries
+     * the failure it replaces as suppressed. Nothing is rethrown here, so the action that follows always runs.
+     */
     private static Throwable run(Runnable action, Throwable earlier) {
         try {
             action.run();
             return earlier;
-        } catch (VirtualMachineError fatal) {
-            throw fatal;
         } catch (RuntimeException | Error e) {
-            if (earlier == null) {
+            if (earlier == null || e == earlier) {
+                return e;
+            }
+            if (e instanceof VirtualMachineError && !(earlier instanceof VirtualMachineError)) {
+                e.addSuppressed(earlier);
                 return e;
             }
             earlier.addSuppressed(e);
