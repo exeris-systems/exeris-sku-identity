@@ -61,6 +61,10 @@ Goal: take a first installation from an empty PostgreSQL server to a signed-in o
 
 `bootstrap-owner` exits with status 0 and the login of step 7 answers 200 with an `accessToken` and a `refreshToken`.
 
+## What it costs
+
+`bootstrap-owner` creates the first account once: a later run is refused, and the command cannot redo or reset it. The audit event of that creation goes to the in-memory audit sink and is lost when the command exits, so the procedure leaves no audit record of the first account.
+
 ## Where this does not apply
 
 Embedding the library in a host through `IdentityComposition` does not use the launcher; the [README](../../README.md#what-it-provides) describes it. Creating the tenant in the host, a second owner and resetting the bootstrap are not covered by `bootstrap-owner` (see [`bootstrap-owner`](../reference/launcher.md#bootstrap-owner)).
