@@ -14,7 +14,6 @@ import eu.exeris.sku.identity.support.TestConfig;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
@@ -835,7 +834,6 @@ class IdentityCompositionDrainBudgetTest {
      */
     @org.junit.jupiter.api.Nested
     @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    @EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     class KnownDefects {
 
         @Test

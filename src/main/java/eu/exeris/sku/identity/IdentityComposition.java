@@ -232,7 +232,8 @@ public final class IdentityComposition {
      * stops what started. Stopping a stopped composition does nothing.
      *
      * <p>Every capability is drained and then terminated whatever an earlier one threw: an exception from a
-     * drain or a terminate is logged, and an {@link Error} is remembered and rethrown after the last
+     * drain or a terminate is logged by the class of the capability and of the exception, without its
+     * message or stack, and an {@link Error} is remembered and rethrown after the last
      * capability has been terminated, the first one with the later ones suppressed, so that a capability whose
      * class cannot be loaded does not leave the ones after it holding their resources.
      *
@@ -311,7 +312,8 @@ public final class IdentityComposition {
                 }
             } catch (Exception e) {
                 System.getLogger(IdentityComposition.class.getName())
-                        .log(System.Logger.Level.WARNING, "draining a capability failed", e);
+                        .log(System.Logger.Level.WARNING, "draining {0} failed: {1}", module.getClass().getName(),
+                                e.getClass().getName());
             } catch (Error e) {
                 failure = remember(failure, e);
             }
@@ -393,10 +395,10 @@ public final class IdentityComposition {
                 module.terminate();
             } catch (RuntimeException e) {
                 System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
-                        "terminating {0} failed: {1}", module.getClass().getSimpleName(), e.getMessage());
+                        "terminating {0} failed: {1}", module.getClass().getName(), e.getClass().getName());
             } catch (Error e) {
                 System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
-                        "terminating {0} failed: {1}", module.getClass().getSimpleName(), e.getClass().getName());
+                        "terminating {0} failed: {1}", module.getClass().getName(), e.getClass().getName());
                 failure = remember(failure, e);
             }
         }
