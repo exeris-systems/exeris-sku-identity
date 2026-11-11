@@ -1,10 +1,12 @@
 package eu.exeris.sku.identity.launcher;
 
 import eu.exeris.sku.identity.support.LaunchedProcess;
+import eu.exeris.sku.identity.support.IdentityHarness;
 import eu.exeris.sku.identity.support.PostgresSupport;
 import eu.exeris.sku.identity.support.TestConfig;
 import eu.exeris.sku.identity.support.process.FailingMembershipDirectory;
 import eu.exeris.sku.identity.support.process.FileMembershipDirectory;
+import eu.exeris.sku.identity.support.process.ParkingMembershipDirectory;
 import eu.exeris.sku.identity.support.process.OutboxInvitationDelivery;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -23,7 +25,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -33,8 +37,8 @@ import static eu.exeris.sku.identity.launcher.BootstrapOwnerSupport.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The command end to end, with a real kernel: it needs a licence manifest, so the class carries the
- * {@code kernel-boot} tag. A developer without a licence runs {@code mvn verify -DexcludedGroups=kernel-boot}.
+ * The command end to end, with a real kernel, one test for each way it ends once the kernel has booted: it
+ * needs a licence manifest, so the class carries the {@code kernel-boot} tag. A developer without a licence runs {@code mvn verify -DexcludedGroups=kernel-boot}.
  */
 @Tag("kernel-boot")
 @DisplayName("bootstrap-owner with a booted kernel")
@@ -178,14 +182,15 @@ class BootstrapOwnerProcessIT {
         assertThat(row.verifiedAtSet()).isTrue();
         assertThat(grants(hostDirectory)).containsExactly(row.subject() + "|" + tenant + "|owner");
         assertThat(first.run().output()).contains(row.subject().toString());
-        assertNoSecrets(first.run().output(), password, database.servicePassword());
+        assertNoSecrets(first.run().output(), password, password + "\r\n", database.servicePassword(), email,
+                email.toLowerCase());
 
         Run second = run(env);
 
         assertThat(second.status()).as(second.output()).isEqualTo(ACCOUNTS_EXIST);
         assertThat(accounts(database)).isEqualTo(1);
         assertThat(grants(hostDirectory)).hasSize(1);
-        assertNoSecrets(second.output(), password, database.servicePassword());
+        assertNoSecrets(second.output(), password, database.servicePassword(), email, email.toLowerCase());
 
         int port = Integer.parseInt(env.get("EXERIS_HTTP_PORT"));
         try (LaunchedProcess service = LaunchedProcess.start(env)) {
@@ -225,7 +230,7 @@ class BootstrapOwnerProcessIT {
         assertThat(result.portWasBound()).isFalse();
         assertThat(accounts(database)).isEqualTo(1);
         assertThat(result.run().output()).contains("belongs to no tenant", "no role or scope", "cannot issue invitations");
-        assertNoSecrets(result.run().output(), password, database.servicePassword());
+        assertNoSecrets(result.run().output(), password, database.servicePassword(), email, email.toLowerCase());
 
         int port = Integer.parseInt(env.get("EXERIS_HTTP_PORT"));
         try (LaunchedProcess service = LaunchedProcess.start(env)) {
@@ -250,7 +255,7 @@ class BootstrapOwnerProcessIT {
         Run run = run(env);
 
         assertThat(run.status()).as(run.output()).isEqualTo(CONFIG);
-        assertThat(run.output()).contains(EMAIL);
+        assertThat(run.output()).contains(EMAIL).doesNotContain(bad);
         assertThat(accounts(database)).isZero();
         assertThat(grants(hostDirectory)).isEmpty();
     }
@@ -270,7 +275,7 @@ class BootstrapOwnerProcessIT {
         assertThat(failed.status()).as(failed.output()).isEqualTo(NOT_COMPLETED);
         assertThat(failed.output()).doesNotContain(FailingMembershipDirectory.MESSAGE);
         assertThat(accounts(database)).isZero();
-        assertNoSecrets(failed.output(), password, database.servicePassword());
+        assertNoSecrets(failed.output(), password, database.servicePassword(), env.get(EMAIL));
 
         env.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", FileMembershipDirectory.class.getName());
         Run again = run(env);
@@ -278,5 +283,168 @@ class BootstrapOwnerProcessIT {
         assertThat(again.status()).as(again.output()).isEqualTo(OK);
         assertThat(accounts(database)).isEqualTo(1);
         assertThat(grants(hostDirectory)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("A database where migrate has not run exits 65 after the boot, creates no table and no grant")
+    void notMigrated(@TempDir Path dir) throws Exception {
+        PostgresSupport.Database database = PostgresSupport.emptyDatabase();
+        Path hostDirectory = Files.createDirectory(dir.resolve("host"));
+        String password = new String(TestConfig.randomPassword());
+        Map<String, String> env = hosted(licensed(database, passwordFile(dir, password)), hostDirectory,
+                UUID.randomUUID());
+
+        Run run = run(env);
+
+        assertThat(run.status()).as(run.output()).isEqualTo(NOT_MIGRATED);
+        assertThat(tables(database)).isEmpty();
+        assertThat(grants(hostDirectory)).isEmpty();
+        assertNoSecrets(run.output(), password, database.servicePassword(), env.get(EMAIL));
+    }
+
+    @Test
+    @DisplayName("A service role that may not read, or may not insert into, the credential table exits 65 and writes nothing")
+    void missingPrivilege(@TempDir Path dir) throws Exception {
+        for (String privilege : new String[] {"SELECT", "INSERT"}) {
+            PostgresSupport.Database database = PostgresSupport.newDatabase();
+            revoke(database, privilege);
+            Path hostDirectory = Files.createDirectory(dir.resolve("host-" + privilege));
+            String password = new String(TestConfig.randomPassword());
+            Map<String, String> env = hosted(licensed(database, passwordFile(dir, password)), hostDirectory,
+                    UUID.randomUUID());
+
+            Run run = run(env);
+
+            assertThat(run.status()).as(privilege + System.lineSeparator() + run.output()).isEqualTo(NOT_MIGRATED);
+            assertThat(accounts(database)).as(privilege).isZero();
+            assertThat(grants(hostDirectory)).as(privilege).isEmpty();
+            assertNoSecrets(run.output(), password, database.servicePassword(), env.get(EMAIL));
+        }
+    }
+
+    @Test
+    @DisplayName("A database that already holds an account exits 73 and adds no account and no grant")
+    void accountsExist(@TempDir Path dir) throws Exception {
+        try (IdentityHarness service = IdentityHarness.start()) {
+            service.account();
+            Path hostDirectory = Files.createDirectory(dir.resolve("host"));
+            String password = new String(TestConfig.randomPassword());
+            Map<String, String> env = hosted(licensed(service.database, passwordFile(dir, password)), hostDirectory,
+                    UUID.randomUUID());
+
+            Run run = run(env);
+
+            assertThat(run.status()).as(run.output()).isEqualTo(ACCOUNTS_EXIST);
+            assertThat(accounts(service.database)).isEqualTo(1);
+            assertThat(grants(hostDirectory)).isEmpty();
+            assertNoSecrets(run.output(), password, service.database.servicePassword(), env.get(EMAIL));
+        }
+    }
+
+    @Test
+    @DisplayName("A credential table under row-level security exits 78 with a message that says so, and writes nothing")
+    void rowLevelSecurity(@TempDir Path dir) throws Exception {
+        PostgresSupport.Database database = PostgresSupport.newDatabase();
+        enableRowLevelSecurity(database);
+        Path hostDirectory = Files.createDirectory(dir.resolve("host"));
+        String password = new String(TestConfig.randomPassword());
+        Map<String, String> env = hosted(licensed(database, passwordFile(dir, password)), hostDirectory,
+                UUID.randomUUID());
+
+        Run run = run(env);
+
+        assertThat(run.status()).as(run.output()).isEqualTo(CONFIG);
+        assertThat(run.output()).contains("credential table must not be under row-level security");
+        assertThat(accounts(database)).isZero();
+        assertThat(grants(hostDirectory)).isEmpty();
+        assertNoSecrets(run.output(), password, database.servicePassword(), env.get(EMAIL));
+    }
+
+    @Test
+    @DisplayName("A run that holds the first account uncommitted makes a second run wait on the table, then find it: exits 0 and 73, one account, one grant")
+    void overlappingRuns(@TempDir Path dir) throws Exception {
+        PostgresSupport.Database database = PostgresSupport.newDatabase();
+        Path hostDirectory = Files.createDirectory(dir.resolve("host"));
+        UUID tenant = UUID.randomUUID();
+        String password = new String(TestConfig.randomPassword());
+        Map<String, String> first = hosted(licensed(database, passwordFile(dir, password)), hostDirectory, tenant);
+        first.put("EXERIS_IDENTITY_MEMBERSHIP_DIRECTORY", ParkingMembershipDirectory.class.getName());
+        Map<String, String> second = copy(first);
+        second.put(EMAIL, email());
+        second.put("EXERIS_HTTP_PORT", String.valueOf(LaunchedProcess.freePort()));
+
+        try (LaunchedProcess a = LaunchedProcess.start(first, "bootstrap-owner")) {
+            awaitParked(a, hostDirectory);
+            try (LaunchedProcess b = LaunchedProcess.start(second, "bootstrap-owner")) {
+                String waiting = awaitWaiter(database, b);
+
+                assertThat(waiting).containsIgnoringCase("credential_records");
+                assertThat(a.isAlive()).as("the first run holds its transaction open").isTrue();
+                assertThat(b.isAlive()).as("the second run waits for the first").isTrue();
+                assertThat(accounts(database)).as("nothing is committed yet").isZero();
+
+                Files.createFile(hostDirectory.resolve(ParkingMembershipDirectory.RELEASE));
+
+                assertThat(a.awaitExit(180)).as(a.output()).isEqualTo(OK);
+                assertThat(b.awaitExit(180)).as(b.output()).isEqualTo(ACCOUNTS_EXIST);
+                assertNoSecrets(a.output() + b.output(), password, database.servicePassword(), first.get(EMAIL),
+                        second.get(EMAIL));
+            }
+        }
+
+        assertThat(accounts(database)).isEqualTo(1);
+        Credential row = onlyCredential(database);
+        assertThat(grants(hostDirectory)).containsExactly(row.subject() + "|" + tenant + "|owner");
+    }
+
+    /**
+     * Two runs started together on fresh databases. The overlap is left to chance, so this is statistical; the
+     * test above forces it.
+     */
+    @Test
+    @DisplayName("Ten pairs of runs started together each exit 0 and 73 and leave one account and one grant")
+    void pairsStartedTogether(@TempDir Path dir) throws Exception {
+        for (int round = 0; round < 10; round++) {
+            PostgresSupport.Database database = PostgresSupport.newDatabase();
+            Path hostDirectory = Files.createDirectory(dir.resolve("host-" + round));
+            UUID tenant = UUID.randomUUID();
+            Path file = passwordFile(dir, new String(TestConfig.randomPassword()));
+            Map<String, String> first = hosted(licensed(database, file), hostDirectory, tenant);
+            Map<String, String> second = copy(first);
+            second.put(EMAIL, email());
+            second.put("EXERIS_HTTP_PORT", String.valueOf(LaunchedProcess.freePort()));
+
+            try (LaunchedProcess a = LaunchedProcess.start(first, "bootstrap-owner");
+                 LaunchedProcess b = LaunchedProcess.start(second, "bootstrap-owner")) {
+                List<Integer> statuses = new ArrayList<>(List.of(a.awaitExit(180), b.awaitExit(180)));
+                statuses.sort(Integer::compare);
+
+                assertThat(statuses).as("round " + round + System.lineSeparator() + a.output()
+                        + System.lineSeparator() + b.output()).containsExactly(OK, ACCOUNTS_EXIST);
+            }
+
+            assertThat(accounts(database)).as("round " + round).isEqualTo(1);
+            assertThat(grants(hostDirectory)).as("round " + round).hasSize(1)
+                    .containsExactly(onlyCredential(database).subject() + "|" + tenant + "|owner");
+        }
+    }
+
+    private static void awaitParked(LaunchedProcess process, Path hostDirectory) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+        while (!Files.exists(hostDirectory.resolve(ParkingMembershipDirectory.PARKED))) {
+            if (!process.isAlive() || System.nanoTime() > deadline) {
+                throw new AssertionError("the first run never reached its grant" + System.lineSeparator()
+                        + process.output());
+            }
+            Thread.sleep(20);
+        }
+    }
+
+    private static String awaitWaiter(PostgresSupport.Database database, LaunchedProcess second) throws Exception {
+        try {
+            return awaitCredentialTableWaiter(database);
+        } catch (AssertionError never) {
+            throw new AssertionError(never.getMessage() + System.lineSeparator() + second.output(), never);
+        }
     }
 }

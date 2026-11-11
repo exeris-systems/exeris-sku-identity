@@ -1,6 +1,5 @@
 package eu.exeris.sku.identity.launcher;
 
-import eu.exeris.sku.identity.support.IdentityHarness;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.LaunchedProcess;
 import eu.exeris.sku.identity.support.PostgresSupport;
@@ -28,8 +27,9 @@ import static eu.exeris.sku.identity.launcher.BootstrapOwnerSupport.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Every case in which the command must refuse before it writes anything. All of them end before the kernel
- * boots, so none needs a licence; each runs the real launcher in a process of its own.
+ * Every case in which the command must refuse before the kernel boots, so none needs a licence, plus the one
+ * case where the kernel refuses to boot; each runs the real launcher in a process of its own. The refusals the
+ * credential store decides inside the transaction are in {@link BootstrapOwnerProcessIT}.
  */
 @DisplayName("bootstrap-owner refuses and changes nothing")
 class BootstrapOwnerRefusalIT {
@@ -132,7 +132,8 @@ class BootstrapOwnerRefusalIT {
                 assertThat(run.output()).contains(c.key());
                 assertThat(accounts(database)).isZero();
                 assertThat(grants(hostDirectory)).isEmpty();
-                assertNoSecrets(run.output(), password, database.servicePassword(), database.ownerPassword(), inline);
+                assertNoSecrets(run.output(), password, database.servicePassword(), database.ownerPassword(), inline,
+                        env.get(EMAIL) == null ? password : env.get(EMAIL));
             }));
         }
         tests.add(DynamicTest.dynamicTest("tenant set while no directory is configured", () -> {
@@ -183,18 +184,26 @@ class BootstrapOwnerRefusalIT {
     }
 
     @Test
-    @DisplayName("A database where migrate has not run exits 65 and creates no table")
-    void notMigrated(@TempDir Path dir) throws Exception {
-        PostgresSupport.Database database = PostgresSupport.emptyDatabase();
-        List<String> before = tables(database);
+    @DisplayName("A service role that bypasses row-level security exits 78 before the kernel boots, and nothing is written")
+    void bypassRlsRole(@TempDir Path dir) throws Exception {
+        PostgresSupport.Database database = PostgresSupport.newDatabase();
+        String role = "bypass_" + TestConfig.randomBase64(6).replaceAll("[^A-Za-z0-9]", "x").toLowerCase();
+        String rolePassword = "p" + TestConfig.randomBase64(12).replaceAll("[^A-Za-z0-9]", "x");
+        try (Connection owner = database.owner(); Statement statement = owner.createStatement()) {
+            statement.execute("CREATE ROLE " + role + " LOGIN PASSWORD '" + rolePassword + "' NOSUPERUSER BYPASSRLS");
+            statement.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role);
+        }
         String password = new String(TestConfig.randomPassword());
         Map<String, String> env = environment(database, passwordFile(dir, password));
+        env.put("EXERIS_DATABASE_USER", role);
+        env.put("EXERIS_DATABASE_PASSWORD", rolePassword);
 
         Run run = run(env);
 
-        assertThat(run.status()).as(run.output()).isEqualTo(NOT_MIGRATED);
-        assertThat(tables(database)).isEqualTo(before).isEmpty();
-        assertNoSecrets(run.output(), password, database.servicePassword());
+        assertThat(run.status()).as(run.output()).isEqualTo(CONFIG);
+        assertThat(run.output()).contains("NOBYPASSRLS");
+        assertThat(accounts(database)).isZero();
+        assertNoSecrets(run.output(), password, rolePassword, env.get(EMAIL));
     }
 
     @Test
@@ -211,43 +220,6 @@ class BootstrapOwnerRefusalIT {
     }
 
     @Test
-    @DisplayName("A role that cannot use the credential table exits 65 even when accounts exist")
-    void notMigratedIsCheckedBeforeEmptiness(@TempDir Path dir) throws Exception {
-        try (IdentityHarness service = IdentityHarness.start()) {
-            service.account();
-            try (Connection owner = service.database.owner(); Statement statement = owner.createStatement()) {
-                statement.execute("REVOKE SELECT ON credential_records FROM " + PostgresSupport.serviceRole());
-            }
-            Map<String, String> env = environment(service.database,
-                    passwordFile(dir, new String(TestConfig.randomPassword())));
-
-            Run run = run(env);
-
-            assertThat(run.status()).as(run.output()).isEqualTo(NOT_MIGRATED);
-            assertThat(accounts(service.database)).isEqualTo(1);
-        }
-    }
-
-    @Test
-    @DisplayName("An account created any other way makes it exit 73, with rows and grants unchanged")
-    void accountsExist(@TempDir Path dir) throws Exception {
-        try (IdentityHarness service = IdentityHarness.start()) {
-            service.account();
-            Path hostDirectory = Files.createDirectory(dir.resolve("host"));
-            String password = new String(TestConfig.randomPassword());
-            Map<String, String> env = environment(service.database, passwordFile(dir, password));
-            withDirectory(env, hostDirectory, UUID.randomUUID());
-
-            Run run = run(env);
-
-            assertThat(run.status()).as(run.output()).isEqualTo(ACCOUNTS_EXIST);
-            assertThat(accounts(service.database)).isEqualTo(1);
-            assertThat(grants(hostDirectory)).isEmpty();
-            assertNoSecrets(run.output(), password, service.database.servicePassword());
-        }
-    }
-
-    @Test
     @DisplayName("An unreachable database exits 69 and writes nothing")
     void unreachable(@TempDir Path dir) throws Exception {
         PostgresSupport.Database database = PostgresSupport.newDatabase();
@@ -259,7 +231,7 @@ class BootstrapOwnerRefusalIT {
 
         assertThat(run.status()).as(run.output()).isEqualTo(UNAVAILABLE);
         assertThat(accounts(database)).isZero();
-        assertNoSecrets(run.output(), password, database.servicePassword());
+        assertNoSecrets(run.output(), password, database.servicePassword(), env.get(EMAIL));
     }
 
     @Test
@@ -295,6 +267,6 @@ class BootstrapOwnerRefusalIT {
         assertThat(run.status()).as(run.output()).isEqualTo(NOT_COMPLETED);
         assertThat(run.output()).contains("No license manifest found");
         assertThat(accounts(database)).isZero();
-        assertNoSecrets(run.output(), password, database.servicePassword());
+        assertNoSecrets(run.output(), password, database.servicePassword(), env.get(EMAIL));
     }
 }

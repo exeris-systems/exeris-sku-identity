@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * What the tests of the {@code bootstrap-owner} command share: the settings under their documented names, a
@@ -125,6 +126,58 @@ final class BootstrapOwnerSupport {
     /** The grants a file-backed directory recorded; empty when none. */
     static List<String> grants(Path hostDirectory) {
         return HostFiles.lines(hostDirectory, MEMBERSHIPS);
+    }
+
+    /**
+     * Waits until a backend of the database is seen blocked on a heavyweight lock whose statement names the
+     * credential table, and returns that statement. The wait ends on the observation, never on elapsed time;
+     * the limit only turns a run that never blocks into a failure.
+     */
+    static String awaitCredentialTableWaiter(PostgresSupport.Database database) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
+        while (System.nanoTime() < deadline) {
+            try (Connection owner = database.owner(); Statement statement = owner.createStatement();
+                 ResultSet rows = statement.executeQuery(
+                         "SELECT query FROM pg_stat_activity WHERE datname = current_database() "
+                                 + "AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' "
+                                 + "AND query ILIKE '%credential_records%' LIMIT 1")) {
+                if (rows.next()) {
+                    return rows.getString(1);
+                }
+            }
+            Thread.onSpinWait();
+            Thread.sleep(20);
+        }
+        throw new AssertionError("no backend was ever seen waiting on a lock for the credential table");
+    }
+
+    /** Every SQLSTATE found along a failure's causes, in either an SQL exception or a persistence exception. */
+    static List<String> sqlStates(Throwable failure) {
+        List<String> states = new ArrayList<>();
+        for (Throwable t = failure; t != null && !(t.getCause() == t); t = t.getCause()) {
+            if (t instanceof SQLException sql && sql.getSQLState() != null) {
+                states.add(sql.getSQLState());
+            }
+            if (t instanceof eu.exeris.kernel.spi.exceptions.persistence.PersistenceProviderException ppe
+                    && ppe.rawArgs().length > 0 && ppe.rawArgs()[0] instanceof String state) {
+                states.add(state);
+            }
+        }
+        return states;
+    }
+
+    /** Puts the credential table under row-level security with no policy, as a migration of another owner might. */
+    static void enableRowLevelSecurity(PostgresSupport.Database database) throws SQLException {
+        try (Connection owner = database.owner(); Statement statement = owner.createStatement()) {
+            statement.execute("ALTER TABLE credential_records ENABLE ROW LEVEL SECURITY");
+        }
+    }
+
+    /** Takes a privilege on the credential table from the service role. */
+    static void revoke(PostgresSupport.Database database, String privilege) throws SQLException {
+        try (Connection owner = database.owner(); Statement statement = owner.createStatement()) {
+            statement.execute("REVOKE " + privilege + " ON credential_records FROM " + PostgresSupport.serviceRole());
+        }
     }
 
     /** An independent copy of an environment. */
