@@ -170,11 +170,11 @@ class LogRedactionTest {
     }
 
     @Test
-    @DisplayName("A one-character secret is withheld wherever that character appears")
+    @DisplayName("A one-character secret is not replaced where it merely occurs, but is withheld as a labelled value and as an authority password")
     void oneCharacterSecret() {
-        String safe = LogRedaction.of("abcabc", "b");
-
-        assertThat(safe).isEqualTo("a" + W + "ca" + W + "c");
+        assertThat(LogRedaction.of("abcabc", "b")).isEqualTo("abcabc");
+        assertThat(LogRedaction.of("password=b", "b")).isEqualTo("password=" + W);
+        assertThat(LogRedaction.of("jdbc:postgresql://u:b@h/d", "b")).isEqualTo("jdbc:postgresql://u:" + W + "@h/d");
     }
 
     @Test
