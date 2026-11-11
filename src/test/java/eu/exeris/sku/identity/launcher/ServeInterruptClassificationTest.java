@@ -373,7 +373,6 @@ class ServeInterruptClassificationTest {
      */
     @Nested
     @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    @EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     class KnownDefects {
 
         @Test

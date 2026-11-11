@@ -379,11 +379,15 @@ public final class IdentitySkuApplication {
 
     /**
      * Whether a failure is the refusal of an interrupt that is still pending: the calling thread's interrupt
-     * flag is set and an {@link InterruptedException}, an {@link java.io.InterruptedIOException} or a
-     * {@link java.nio.channels.ClosedByInterruptException} is in the cause chain. Each of those is raised
-     * only by an interrupt, and a step that refuses one restores the flag, so the pair identifies a failure
-     * that the interrupt caused. A failure without such a cause, or one after which the flag was cleared, is
-     * not recognised and stays a failure.
+     * flag is set and an {@link InterruptedException}, a {@link java.nio.channels.ClosedByInterruptException}
+     * or a plain {@link java.io.InterruptedIOException} is in the cause chain. A step that refuses an
+     * interrupt restores the flag, so the pair identifies a failure that the interrupt caused.
+     *
+     * <p>A subclass of {@code InterruptedIOException} does not count, because it is raised for causes other
+     * than an interrupt: {@link java.net.SocketTimeoutException} is a connect or read timeout, and a timeout
+     * is a failure of the network whether or not the flag is set. Only the exact class
+     * {@code InterruptedIOException} is the signal of an interrupted blocking operation. A failure without
+     * such a cause, or one after which the flag was cleared, is not recognised and stays a failure.
      */
     static boolean causedByInterrupt(Throwable failure) {
         if (!interrupted()) {
@@ -391,8 +395,8 @@ public final class IdentitySkuApplication {
         }
         Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
-            if (cause instanceof InterruptedException || cause instanceof java.io.InterruptedIOException
-                    || cause instanceof java.nio.channels.ClosedByInterruptException) {
+            if (cause instanceof InterruptedException || cause instanceof java.nio.channels.ClosedByInterruptException
+                    || cause.getClass() == java.io.InterruptedIOException.class) {
                 return true;
             }
         }
