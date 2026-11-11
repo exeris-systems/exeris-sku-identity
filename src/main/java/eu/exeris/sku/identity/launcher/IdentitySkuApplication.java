@@ -307,18 +307,28 @@ public final class IdentitySkuApplication {
                             builder.invitationDelivery(plan.invitationDelivery());
                         }
                         IdentityComposition built = builder.build();
-                        if (stop.admit(() -> built.stop(DRAIN))) {
+                        if (!interrupted() && stop.admit(() -> built.stop(DRAIN))) {
                             // Host parts are created before the kernel boots; they get the executor now,
                             // before start() runs any job and before handler.serve() lets any request in.
                             plan.joinTransactions(built.transactionalExecutor());
+                            if (interrupted()) {
+                                // Asked to stop while a host part ran: refuse the start through the stop.
+                                reportStopFailure(stop.stop(), outcome);
+                            }
                             if (!built.tryStart()) {
                                 // A stop won between the admission and the start: nothing is started.
                                 return;
                             }
+                            if (interrupted()) {
+                                // Asked to stop while the composition started: it never serves.
+                                return;
+                            }
                             handler.serve(built.httpHandler());
                             outcome.serving = true;
-                            LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",
-                                    plan.config().http().bindHost(), plan.config().http().port());
+                            if (!interrupted()) {
+                                LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",
+                                        plan.config().http().bindHost(), plan.config().http().port());
+                            }
                             shutdown.await();
                         }
                     } catch (InterruptedException e) {
@@ -329,16 +339,26 @@ public final class IdentitySkuApplication {
                     } catch (Exception | Error e) {
                         outcome.failure = e;
                     } finally {
-                        Throwable stopFailure = stop.stop();
-                        if (stopFailure != null) {
-                            LOG.log(System.Logger.Level.ERROR, "Stopping Identity failed ({0})",
-                                    stopFailure.getClass().getName());
-                            if (outcome.failure == null) {
-                                outcome.failure = stopFailure;
-                            }
-                        }
+                        reportStopFailure(stop.stop(), outcome);
                     }
                 });
+    }
+
+    /**
+     * Whether the serving thread has been asked to stop, which is what an interrupt means. The flag is read
+     * and not cleared, so that {@code shutdown.await()} still sees it and every later check agrees.
+     */
+    private static boolean interrupted() {
+        return Thread.currentThread().isInterrupted();
+    }
+
+    private static void reportStopFailure(Throwable stopFailure, Outcome outcome) {
+        if (stopFailure != null) {
+            LOG.log(System.Logger.Level.ERROR, "Stopping Identity failed ({0})", stopFailure.getClass().getName());
+            if (outcome.failure == null) {
+                outcome.failure = stopFailure;
+            }
+        }
     }
 
     private static JobScheduler scheduler() {
