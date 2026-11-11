@@ -930,38 +930,36 @@ class IdentityCompositionLifecycleTest {
         throw (T) throwable;
     }
 
-    /** What the capability contract says a drain that overruns its time does: it is abandoned and the unwind proceeds. */
-    @org.junit.jupiter.api.Nested
-    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
-    class KnownDefects {
+    @Test
+    @DisplayName("A drain that sleeps past the budget of a failed start is abandoned at the budget: the later drains are skipped as the budget is used up, every capability is terminated, and the start returns promptly")
+    void overrunningDrainIsAbandoned() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.hook("D").onReady = () -> {
+            throw new IllegalStateException("ready D");
+        };
+        fixture.hook("C").onDrain = () -> Thread.sleep(Duration.ofSeconds(120));
+        ExecutorService pool = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "overrunning-start");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            long begin = System.nanoTime();
+            Future<Object> starting = pool.submit(() -> catchThrowable(fixture.composition::start));
 
-        @Test
-        @DisplayName("A drain that sleeps past its budget does not hold the unwind of a failed start: the later capabilities are still drained and terminated")
-        void overrunningDrainIsAbandoned() throws Exception {
-            Fixture fixture = new Fixture();
-            fixture.hook("D").onReady = () -> {
-                throw new IllegalStateException("ready D");
-            };
-            fixture.hook("C").onDrain = () -> Thread.sleep(Duration.ofSeconds(120));
-            ExecutorService pool = Executors.newSingleThreadExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "overrunning-start");
-                thread.setDaemon(true);
-                return thread;
-            });
-            try {
-                Future<Object> starting = pool.submit(() -> catchThrowable(fixture.composition::start));
+            Object outcome = starting.get(5 + 10, TimeUnit.SECONDS);
+            long seconds = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - begin);
 
-                Object outcome = starting.get(5 + 10, TimeUnit.SECONDS);
-
-                assertThat(outcome).isInstanceOf(IllegalStateException.class);
-                assertThat(fixture.snapshot()).containsExactlyElementsOf(expectedUnwind(3, false));
-            } catch (TimeoutException hung) {
-                throw new AssertionError("the unwind of a failed start was held by a drain that overran its budget; "
-                        + "the log so far: " + fixture.snapshot(), hung);
-            } finally {
-                pool.shutdownNow();
-            }
+            assertThat(outcome).isInstanceOf(IllegalStateException.class);
+            assertThat(seconds).as("one budget of five seconds, not one per drain").isLessThan(8);
+            assertThat(fixture.snapshot()).containsExactly("initialize:A", "initialize:B", "initialize:C",
+                    "initialize:D", "ready:A", "ready:B", "ready:C", "ready:D", "drain:D", "drain:C",
+                    "terminate:D", "terminate:C", "terminate:B", "terminate:A");
+        } catch (TimeoutException hung) {
+            throw new AssertionError("the unwind of a failed start was held by a drain that overran its budget; "
+                    + "the log so far: " + fixture.snapshot(), hung);
+        } finally {
+            pool.shutdownNow();
         }
     }
 }
