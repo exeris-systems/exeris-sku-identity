@@ -48,7 +48,6 @@ class ServeInterruptTimingIT {
 
     /** The password encoder the callback builds first refuses to be built on an interrupted thread. */
     @Test
-    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     @DisplayName("As soon as the kernel calls back, known defect (run with -Didentity.knownDefects=true): status 0, never served, health never 200, the flag still set")
     void atTheKernelCallback() throws Exception {
         int[] port = new int[1];
@@ -62,7 +61,6 @@ class ServeInterruptTimingIT {
     /** A rule of the contract that the launcher does not keep: the kernel refuses to boot on an interrupted thread. */
     @Test
     @DisplayName("Before the call, known defect (run with -Didentity.knownDefects=true): status 0, never served, health never 200, the flag still set")
-    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     void beforeTheCall() throws Exception {
         int[] port = new int[1];
         String output = run(InterruptTimingMain.ENTRY, InMemoryMembershipDirectory.class.getName(), Map.of(), port);

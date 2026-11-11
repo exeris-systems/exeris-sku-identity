@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 /**
@@ -161,8 +162,17 @@ public final class IdentitySkuApplication {
      * Checks the configuration and serves until stopped; returns the process exit status: 0 when stopped on
      * request, {@link #EXIT_CONFIG}, {@link #EXIT_UNAVAILABLE}, or {@link #EXIT_NOT_COMPLETED} when the
      * kernel did not boot or the service failed at any point.
+     *
+     * <p>An interrupt is a request to stop. When the calling thread's interrupt flag is set on entry, or
+     * becomes set before the kernel is asked to boot, nothing is started, no failure is logged, and the
+     * result is 0 with the flag still set: building the password encoder, opening the database and booting
+     * the kernel all refuse to run on an interrupted thread, and that refusal is not a failure of the service.
      */
     static int serve(Map<String, String> environment) {
+        if (interrupted()) {
+            LOG.log(System.Logger.Level.INFO, "Asked to stop before starting, nothing was started");
+            return exitStatus(Ending.STOPPED);
+        }
         // A class that cannot be loaded or initialised, or any failure no step expected, is a start that
         // did not complete.
         return completing(() -> serveChecked(environment), "Identity could not start ({0})");
@@ -181,6 +191,10 @@ public final class IdentitySkuApplication {
             LOG.log(System.Logger.Level.ERROR, "The database cannot be reached, not starting (SQLSTATE {0})",
                     e.getSQLState());
             return EXIT_UNAVAILABLE;
+        }
+        if (interrupted()) {
+            LOG.log(System.Logger.Level.INFO, "Asked to stop before starting, nothing was started");
+            return exitStatus(Ending.STOPPED);
         }
         return exitStatus(run(plan));
     }
@@ -255,6 +269,10 @@ public final class IdentitySkuApplication {
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Exception e) {
+            if (causedByInterrupt(e)) {
+                LOG.log(System.Logger.Level.INFO, "Asked to stop while the kernel booted, nothing was started");
+                return Ending.STOPPED;
+            }
             // Only the kernel can end the callback this way: it records its own failures in the outcome.
             // The licence refusal is a runtime exception, not a BootstrapException. The kernel's message
             // names the gate's code and text; a driver's message may quote the connection URL, so the
@@ -295,6 +313,10 @@ public final class IdentitySkuApplication {
                     try {
                         // The pool is open; the secret need not stay readable in the process properties.
                         System.clearProperty("exeris.persistence.password");
+                        if (interrupted()) {
+                            // Asked to stop before anything was built: building refuses an interrupted thread.
+                            return;
+                        }
                         IdentityComposition.Builder builder = IdentityComposition.builder()
                                 .config(plan.config())
                                 .transactionalExecutor(KernelProviders.transactionalExecutor())
@@ -337,7 +359,10 @@ public final class IdentitySkuApplication {
                     } catch (VirtualMachineError fatal) {
                         throw fatal;
                     } catch (Exception | Error e) {
-                        outcome.failure = e;
+                        // A refusal of the interrupt by a step that waits is a stop, not a failure.
+                        if (!causedByInterrupt(e)) {
+                            outcome.failure = e;
+                        }
                     } finally {
                         reportStopFailure(stop.stop(), outcome);
                     }
@@ -350,6 +375,28 @@ public final class IdentitySkuApplication {
      */
     private static boolean interrupted() {
         return Thread.currentThread().isInterrupted();
+    }
+
+    /**
+     * Whether a failure is the refusal of an interrupt that is still pending: the calling thread's interrupt
+     * flag is set and an {@link InterruptedException}, an {@link java.io.InterruptedIOException} or a
+     * {@link java.nio.channels.ClosedByInterruptException} is in the cause chain. Each of those is raised
+     * only by an interrupt, and a step that refuses one restores the flag, so the pair identifies a failure
+     * that the interrupt caused. A failure without such a cause, or one after which the flag was cleared, is
+     * not recognised and stays a failure.
+     */
+    static boolean causedByInterrupt(Throwable failure) {
+        if (!interrupted()) {
+            return false;
+        }
+        Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof InterruptedException || cause instanceof java.io.InterruptedIOException
+                    || cause instanceof java.nio.channels.ClosedByInterruptException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void reportStopFailure(Throwable stopFailure, Outcome outcome) {
