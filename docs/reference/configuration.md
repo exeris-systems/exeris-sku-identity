@@ -20,11 +20,11 @@ Launcher and database settings:
 | Name | Required | Meaning |
 | --- | --- | --- |
 | `EXERIS_ENVIRONMENT` | `serve`, `bootstrap-owner` | one of `development`, `staging`, `production`, `production-load-sim`, `dr-cold`, `dr-hot`; there is no default |
-| `EXERIS_DATABASE_URL` | `serve`, `bootstrap-owner` | JDBC URL of the database, starting `jdbc:postgresql:` |
+| `EXERIS_DATABASE_URL` | `serve`, `bootstrap-owner` | JDBC URL of the database, starting `jdbc:postgresql:`. It carries no credentials: the PostgreSQL driver does not honour `//user:password@host`, and the service then ends with status 69 (SQLSTATE 08001). The role and its password go in `EXERIS_DATABASE_USER` and `EXERIS_DATABASE_PASSWORD` (or `_FILE`) |
 | `EXERIS_DATABASE_USER` | `serve`, `bootstrap-owner` | the service role |
 | `EXERIS_DATABASE_PASSWORD` or `_FILE` | `serve`, `bootstrap-owner` | the service role's password |
 | `EXERIS_DATABASE_MAX_POOL_SIZE` | no | most pooled connections, 1 to 1000, default 10 |
-| `EXERIS_MIGRATE_DATABASE_URL` | `migrate` | JDBC URL of the same database, starting `jdbc:postgresql:` |
+| `EXERIS_MIGRATE_DATABASE_URL` | `migrate` | JDBC URL of the same database, starting `jdbc:postgresql:`, without credentials (see `EXERIS_DATABASE_URL`) |
 | `EXERIS_MIGRATE_DATABASE_USER` | `migrate` | the migration role |
 | `EXERIS_MIGRATE_DATABASE_PASSWORD` or `_FILE` | `migrate` | the migration role's password |
 | `EXERIS_MIGRATE_SERVICE_ROLE` | no | the service role `migrate` grants access to; lowercase letters, digits and underscores, starting with a letter or underscore, at most 63 characters |

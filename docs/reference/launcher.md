@@ -30,7 +30,7 @@ The jar's manifest names the launcher as its main class and `lib/` as its class 
 | `migrate` | 78 | the migration settings cannot be used |
 | `serve` | 0 | the service ran and its stop was requested by an interrupt of the launcher's thread, which only an embedding host can do; a stop by signal never reports 0 |
 | `serve` | 143 (Linux; 128 plus the signal number) | the service ran and was stopped by SIGTERM; the JVM reports the signal, whatever the launcher returned. |
-| `serve` | 69 | the database cannot be reached; the service did not start |
+| `serve` | 69 | the database cannot be used: it cannot be reached, or it refuses the service role's credentials (a wrong password is logged as SQLSTATE 28P01); a JDBC URL that carries credentials in its authority (`//user:password@host`) also ends here, with SQLSTATE 08001, because the PostgreSQL driver does not honour them. The service did not start |
 | `serve` | 70 | the kernel did not boot, for example without a licence manifest; or the service failed while starting, while serving or while stopping, or a class could not be loaded or initialised at start. One ERROR line is logged. For a kernel that did not boot it carries the kernel's message, such as the licence gate's code and reason, with the database password and any password in a connection URL withheld; for a failure of the service or of a class it names only the exception class. A fatal VM error such as running out of memory also ends with 70, at once and without running the shutdown hooks |
 | `serve` | 78 | the configuration cannot be used, or the service role is a superuser or bypasses row-level security; the service did not start |
 | either | 64 | the command line is not understood |
@@ -41,7 +41,9 @@ No ending of `serve` is an uncaught exception. A supervisor should treat 0 and 1
 
 On SIGTERM the service stops answering (requests get 503), drains in-flight work for at most 15 s per capability, stops its capabilities once, and then the kernel stops its subsystems. A service that no client has kept a connection to stops in under a second.
 
-A connection that a client keeps open can hold the stop until the kernel's HTTP idle timeout (30 s by default) reclaims it. This was measured with kernel 0.13.1 on a connection that was answered 503 while the service was starting, as a load balancer's health probe is, and then served 200: the stop took about 33 s, and the same service stopped in under a second when no connection had been through the starting phase. Give the process a stop grace of at least 60 s (for example `TimeoutStopSec=60` in systemd, `--stop-timeout 60` for a container) so the supervisor does not kill it mid-drain with SIGKILL.
+A connection that a client keeps open can delay the stop by the kernel's HTTP idle timeout (30 s by default). The kernel counts a keep-alive connection as busy while it is parked between requests when its last request was slow, meaning more than about 100 ms from the start of that connection's request-loop iteration to the end of the handler, a time that includes how long the client took to send the request. The stop then waits for the idle timeout to reclaim the connection, and the stopping thread spins on a CPU meanwhile. Any client that pauses more than about 100 ms between requests on a connection it keeps open triggers this, for example a health probe that polls once a second. This is [exeris-kernel issue 835](https://github.com/exeris-systems/exeris-kernel/issues/835), seen with kernel 0.13.1. With the default idle timeout the stop took about 30 to 35 s; a service that no client holds a connection to stops in under a second. Closing the clients' connections before the stop avoids the delay, for example by taking the instance out of the load balancer's rotation before signalling it.
+
+Give the process a stop grace of at least 60 s (for example `TimeoutStopSec=60` in systemd, `--stop-timeout 60` for a container) so the supervisor does not kill it mid-drain with SIGKILL.
 
 ## `bootstrap-owner`
 
@@ -67,7 +69,7 @@ It needs everything `serve` needs (the identity configuration, `EXERIS_ENVIRONME
 | 0 | the account was created |
 | 64 | the command line was not understood |
 | 65 | the schema is not migrated for the service role (found after the kernel booted) |
-| 69 | the database cannot be reached |
+| 69 | the database cannot be used: it cannot be reached, or it refuses the service role's credentials (SQLSTATE 28P01 for a wrong password; 08001 for credentials placed in the URL) |
 | 70 | the kernel did not boot, the provisioning did not run or the transaction failed; nothing was committed |
 | 73 | an account already exists; nothing was changed (found after the kernel booted) |
 | 78 | the configuration cannot be used, or the credential table is under row-level security, which the command refuses because the first account is decided for the whole deployment |
