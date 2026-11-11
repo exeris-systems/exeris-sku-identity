@@ -139,14 +139,11 @@ class ServeKernelBootIT {
         }
     }
 
+    /** One probe on a connection of its own that is closed after the answer, so none is kept to be answered 503. */
     private static boolean healthAnswers(int port) {
         try {
-            var response = java.net.http.HttpClient.newHttpClient().send(
-                    java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:" + port + "/health"))
-                            .timeout(java.time.Duration.ofSeconds(2)).GET().build(),
-                    java.net.http.HttpResponse.BodyHandlers.discarding());
-            return response.statusCode() == 200;
-        } catch (Exception e) {
+            return ServeSupport.get(port, "/health") == 200;
+        } catch (java.io.IOException | RuntimeException e) {
             return false;
         }
     }

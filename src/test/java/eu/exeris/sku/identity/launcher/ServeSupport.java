@@ -114,8 +114,18 @@ final class ServeSupport {
 
         /** Sends one GET and reads the whole answer, which must carry a Content-Length. */
         int get(String path) throws IOException {
-            socket.getOutputStream().write(("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-                    .getBytes(StandardCharsets.US_ASCII));
+            return exchange("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        }
+
+        /** Sends one JSON POST and reads the whole answer, which must carry a Content-Length. */
+        int post(String path, String json) throws IOException {
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            return exchange("POST " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                    + "Content-Length: " + body.length + "\r\n\r\n" + json);
+        }
+
+        private int exchange(String request) throws IOException {
+            socket.getOutputStream().write(request.getBytes(StandardCharsets.UTF_8));
             socket.getOutputStream().flush();
             StringBuilder head = new StringBuilder();
             while (!head.toString().endsWith("\r\n\r\n")) {

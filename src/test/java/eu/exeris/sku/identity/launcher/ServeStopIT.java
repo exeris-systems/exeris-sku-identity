@@ -26,6 +26,7 @@ class ServeStopIT {
     private static final Duration PROMPT = Duration.ofSeconds(5);
     /** Above the kernel's idle timeout of 30 s, below a hang. */
     private static final Duration KERNEL_IDLE_TIMEOUT_BOUND = Duration.ofSeconds(45);
+    private static final Duration IDLE_BEFORE_SIGNAL = Duration.ofSeconds(1);
     /** How often a health probe asks. The kernel's delay shows at a probe's cadence, not when the connection is polled in a tight loop. */
     private static final Duration PROBE_INTERVAL = Duration.ofMillis(250);
 
@@ -75,6 +76,8 @@ class ServeStopIT {
                     assertThat(connection.get("/health")).isEqualTo(200);
                 }
 
+                // A client holds its connection while it is idle; the stop must not depend on a request in flight.
+                Thread.sleep(IDLE_BEFORE_SIGNAL.toMillis());
                 LaunchedProcess.Stopped stopped = process.terminateTimed(60);
 
                 assertCleanStop(stopped, process, port, PROMPT);
@@ -135,6 +138,32 @@ class ServeStopIT {
         }
         throw new AssertionError("no attempt saw a 503 and then a 200 on one connection; the start was never slow "
                 + "enough to answer 503 on a connection kept from before it");
+    }
+
+    /**
+     * Pins a second known behaviour of the kernel, beyond the one above: a kept-alive connection that carried
+     * a POST answered 401 also holds the stop until its idle timeout, while a kept-alive connection that
+     * carried a GET answered 401 or 404 does not. Upper bound only, for the same reason.
+     */
+    @Test
+    @DisplayName("Characterisation of a kernel behaviour: a kept-alive connection that carried a POST answered 401 delays the stop, but not past 45 seconds")
+    void keptAliveConnectionThatCarriedARefusedPostDelaysTheStopWithinTheIdleTimeout() throws Exception {
+        int port = LaunchedProcess.freePort();
+        try (LaunchedProcess process = startHealthy(port)) {
+            ServeSupport.awaitRunning(process);
+            try (ServeSupport.KeptAlive connection = new ServeSupport.KeptAlive(port)) {
+                assertThat(connection.post("/api/v1/auth/login",
+                        "{\"email\":\"nobody@example.test\",\"password\":\"not-a-password\"}")).isEqualTo(401);
+                Thread.sleep(IDLE_BEFORE_SIGNAL.toMillis());
+
+                LaunchedProcess.Stopped stopped = process.terminateTimed(120);
+
+                System.out.println("[stop-time-after-refused-post] " + stopped.took().toMillis() + " ms");
+                assertThat(stopped.status()).as(process.output()).isEqualTo(SIGTERM_STATUS);
+                assertThat(stopped.took()).as("a stop must not hang" + System.lineSeparator() + process.output())
+                        .isLessThan(KERNEL_IDLE_TIMEOUT_BOUND);
+            }
+        }
     }
 
     /**
