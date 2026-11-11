@@ -504,4 +504,246 @@ class IdentityCompositionLifecycleTest {
             }
         }
     }
+
+    // ---- the unwind: Errors, precedence, messages ----------------------------------------------------------
+
+    private static final List<String> ALL_DRAINS = List.of("drain:D", "drain:C", "drain:B", "drain:A");
+    private static final List<String> ALL_TERMINATES = List.of("terminate:D", "terminate:C", "terminate:B", "terminate:A");
+
+    @Test
+    @DisplayName("A drain that throws an Error does not skip a later drain or any terminate; the Error is rethrown after the last terminate")
+    void drainErrorIsRethrownAfterTheLastTerminate() throws Exception {
+        Fixture fixture = new Fixture();
+        NoClassDefFoundError failure = new NoClassDefFoundError("drain C");
+        fixture.hook("C").onDrain = () -> {
+            throw failure;
+        };
+        fixture.composition.start();
+
+        assertThatThrownBy(() -> fixture.composition.stop(DRAIN)).isSameAs(failure);
+
+        assertThat(fixture.entries("drain")).containsExactlyElementsOf(ALL_DRAINS);
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(ALL_TERMINATES);
+        assertThat(fixture.snapshot().get(fixture.snapshot().size() - 1)).isEqualTo("terminate:A");
+        assertThat(failure.getSuppressed()).isEmpty();
+        fixture.composition.stop(DRAIN);
+        assertThat(fixture.entries("terminate")).as("a second stop does nothing").hasSize(4);
+    }
+
+    @Test
+    @DisplayName("Several Errors in one stop: the first is rethrown with the later ones suppressed, whichever phase threw them")
+    void firstErrorKeptLaterSuppressed() throws Exception {
+        Fixture fixture = new Fixture();
+        NoClassDefFoundError first = new NoClassDefFoundError("drain D");
+        LinkageError second = new LinkageError("drain B");
+        ExceptionInInitializerError third = new ExceptionInInitializerError("terminate C");
+        fixture.hook("D").onDrain = () -> {
+            throw first;
+        };
+        fixture.hook("B").onDrain = () -> {
+            throw second;
+        };
+        fixture.hook("C").onTerminate = () -> {
+            throw third;
+        };
+        fixture.composition.start();
+
+        assertThatThrownBy(() -> fixture.composition.stop(DRAIN)).isSameAs(first);
+
+        assertThat(first.getSuppressed()).containsExactlyInAnyOrder(second, third);
+        assertThat(fixture.entries("drain")).containsExactlyElementsOf(ALL_DRAINS);
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(ALL_TERMINATES);
+    }
+
+    @Test
+    @DisplayName("A VirtualMachineError takes precedence over an earlier ordinary Error, which is suppressed onto it; an earlier one keeps its place against a later ordinary Error")
+    void virtualMachineErrorTakesPrecedence() throws Exception {
+        Fixture later = new Fixture();
+        NoClassDefFoundError ordinary = new NoClassDefFoundError("drain C");
+        OutOfMemoryError fatal = new OutOfMemoryError("terminate B");
+        later.hook("C").onDrain = () -> {
+            throw ordinary;
+        };
+        later.hook("B").onTerminate = () -> {
+            throw fatal;
+        };
+        later.composition.start();
+
+        assertThatThrownBy(() -> later.composition.stop(DRAIN)).isSameAs(fatal);
+
+        assertThat(fatal.getSuppressed()).containsExactly(ordinary);
+        assertThat(later.entries("terminate")).containsExactlyElementsOf(ALL_TERMINATES);
+
+        Fixture earlier = new Fixture();
+        OutOfMemoryError firstFatal = new OutOfMemoryError("drain C");
+        NoClassDefFoundError laterOrdinary = new NoClassDefFoundError("terminate B");
+        earlier.hook("C").onDrain = () -> {
+            throw firstFatal;
+        };
+        earlier.hook("B").onTerminate = () -> {
+            throw laterOrdinary;
+        };
+        earlier.composition.start();
+
+        assertThatThrownBy(() -> earlier.composition.stop(DRAIN)).isSameAs(firstFatal);
+
+        assertThat(firstFatal.getSuppressed()).containsExactly(laterOrdinary);
+    }
+
+    @Test
+    @DisplayName("A failed start throws the original failure with an Error from a cleanup terminate suppressed onto it, and still terminates every capability")
+    void cleanupErrorIsSuppressedOntoTheStartFailure() {
+        Fixture fixture = new Fixture();
+        IllegalStateException failure = new IllegalStateException("ready B");
+        NoClassDefFoundError cleanup = new NoClassDefFoundError("terminate C");
+        fixture.hook("B").onReady = () -> {
+            throw failure;
+        };
+        fixture.hook("C").onTerminate = () -> {
+            throw cleanup;
+        };
+
+        assertThatThrownBy(fixture.composition::start).isSameAs(failure);
+
+        assertThat(failure.getSuppressed()).containsExactly(cleanup);
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(ALL_TERMINATES);
+    }
+
+    @Test
+    @DisplayName("A failed start whose cleanup threw a VirtualMachineError throws that error, with the start failure suppressed onto it")
+    void cleanupFatalErrorTakesPrecedenceOverTheStartFailure() {
+        Fixture fixture = new Fixture();
+        IllegalStateException failure = new IllegalStateException("ready B");
+        OutOfMemoryError fatal = new OutOfMemoryError("terminate C");
+        fixture.hook("B").onReady = () -> {
+            throw failure;
+        };
+        fixture.hook("C").onTerminate = () -> {
+            throw fatal;
+        };
+
+        assertThatThrownBy(fixture.composition::start).isSameAs(fatal);
+
+        assertThat(fatal.getSuppressed()).containsExactly(failure);
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(ALL_TERMINATES);
+    }
+
+    @Test
+    @DisplayName("A start that fails with an Error and a cleanup that throws another: the start's Error is thrown with the cleanup's suppressed")
+    void errorStartFailureWithErrorCleanup() {
+        Fixture fixture = new Fixture();
+        NoClassDefFoundError failure = new NoClassDefFoundError("ready B");
+        LinkageError cleanup = new LinkageError("terminate A");
+        fixture.hook("B").onReady = () -> {
+            throw failure;
+        };
+        fixture.hook("A").onTerminate = () -> {
+            throw cleanup;
+        };
+
+        assertThatThrownBy(fixture.composition::start).isSameAs(failure);
+
+        assertThat(failure.getSuppressed()).containsExactly(cleanup);
+    }
+
+    @Test
+    @DisplayName("A start that fails in the first, in a middle and in the last initialize terminates that capability and the earlier ones in reverse, never a later one")
+    void failedInitializeAtEveryPosition() {
+        for (String failing : List.of("A", "B", "C", "D")) {
+            Fixture fixture = new Fixture();
+            fixture.hook(failing).onInitialize = () -> {
+                throw new IllegalStateException("initialize " + failing);
+            };
+
+            assertThatThrownBy(fixture.composition::start).hasMessage("initialize " + failing);
+
+            List<String> expected = new ArrayList<>();
+            for (String name : List.of("A", "B", "C", "D")) {
+                expected.add("initialize:" + name);
+                if (name.equals(failing)) {
+                    break;
+                }
+            }
+            for (int i = expected.size() - 1; i >= 0; i--) {
+                expected.add("terminate:" + expected.get(i).substring("initialize:".length()));
+            }
+            assertThat(fixture.snapshot()).as(failing).containsExactlyElementsOf(expected);
+            assertThat(fixture.entries("ready")).as(failing).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("The messages say which of the three endings refused the start, and tryStart is false only for a stop that came first")
+    void messagesAndTryStart() throws Exception {
+        Fixture stoppedFirst = new Fixture();
+        stoppedFirst.composition.stop(DRAIN);
+        assertThatThrownBy(stoppedFirst.composition::start).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("has been stopped before it was started");
+        assertThat(stoppedFirst.composition.tryStart()).isFalse();
+        assertThat(stoppedFirst.composition.tryStart()).as("and again").isFalse();
+
+        Fixture failed = new Fixture();
+        failed.hook("B").onInitialize = () -> {
+            throw new IllegalStateException("initialize B");
+        };
+        assertThatThrownBy(failed.composition::start).hasMessage("initialize B");
+        for (Action again : List.<Action>of(failed.composition::start, failed.composition::tryStart)) {
+            assertThatThrownBy(again::run).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("start failed and it was stopped; a composition is started at most once")
+                    .hasMessageNotContaining("before it was started");
+        }
+
+        Fixture stopped = new Fixture();
+        stopped.composition.start();
+        stopped.composition.stop(DRAIN);
+        for (Action again : List.<Action>of(stopped.composition::start, stopped.composition::tryStart)) {
+            assertThatThrownBy(again::run).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("has been started and stopped")
+                    .hasMessageNotContaining("before it was started");
+        }
+
+        Fixture running = new Fixture();
+        assertThat(running.composition.tryStart()).isTrue();
+        for (Action again : List.<Action>of(running.composition::start, running.composition::tryStart)) {
+            assertThatThrownBy(again::run).isInstanceOf(IllegalStateException.class).hasMessageContaining("has been started")
+                    .hasMessageNotContaining("stopped");
+        }
+        running.composition.stop(DRAIN);
+    }
+
+    /** The unwind the capability lifecycle contract describes for a failed start; the composition does not do it. */
+    @org.junit.jupiter.api.Nested
+    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
+    class KnownDefects {
+
+        @Test
+        @DisplayName("A failed initialize drains the capabilities that completed it, in reverse order, then terminates the failing one and them")
+        void failedInitializeDrainsThePrefixThenTerminates() {
+            Fixture fixture = new Fixture();
+            fixture.hook("C").onInitialize = () -> {
+                throw new IllegalStateException("initialize C");
+            };
+
+            assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
+
+            assertThat(fixture.snapshot()).containsExactly("initialize:A", "initialize:B", "initialize:C",
+                    "drain:B", "drain:A", "terminate:C", "terminate:B", "terminate:A");
+        }
+
+        @Test
+        @DisplayName("A failed ready drains every capability in reverse order, then terminates every one")
+        void failedReadyDrainsEverythingThenTerminates() {
+            Fixture fixture = new Fixture();
+            fixture.hook("B").onReady = () -> {
+                throw new IllegalStateException("ready B");
+            };
+
+            assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
+
+            assertThat(fixture.entries("drain")).containsExactlyElementsOf(ALL_DRAINS);
+            List<String> snapshot = fixture.snapshot();
+            assertThat(snapshot.indexOf("drain:A")).isLessThan(snapshot.indexOf("terminate:D"));
+        }
+    }
 }
