@@ -3,7 +3,6 @@ package eu.exeris.sku.identity.launcher;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -23,10 +22,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The contract of {@link LogRedaction}, stated in its documentation, checked at unit level. The properties are
  * generated from a seed: {@value #DEFAULT_SEED} unless the {@code redaction.seed} system property names another,
  * and every failure message carries the seed.
- *
- * <p>A test in {@link KnownDefects} states a rule of the contract that the implementation does not keep. It is
- * skipped unless the {@code identity.knownDefects} system property is {@code true}, so that the suite stays
- * green while the defect stands and the test still runs on demand.
  */
 @DisplayName("LogRedaction contract")
 class LogRedactionContractTest {
@@ -875,11 +870,11 @@ class LogRedactionContractTest {
         }
     }
 
-    // ---- the contract rules the implementation does not keep ----------------------------------------------
+    // ---- a space and a plus in one secret ------------------------------------------------------------------
 
     @Nested
-    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    class KnownDefects {
+    @DisplayName("A secret that has both a space and a plus")
+    class SpaceAndPlusInOneSecret {
 
         @Test
         @DisplayName("2: in a secret that has both a space and a '+', a '+' may stand for the space while another '+' is the secret's own")
@@ -918,11 +913,10 @@ class LogRedactionContractTest {
 
     /** Pins the word list the structure rules rely on, so that a rename of a constant cannot change the table silently. */
     @Test
-    @DisplayName("The caps and the minimum are the documented ones")
+    @DisplayName("The secret cap and the minimum secret length are the documented ones")
     void constants() {
         assertThat(LogRedaction.MINIMUM_SECRET_LENGTH).isEqualTo(3);
         assertThat(LogRedaction.MAXIMUM_SECRETS).isEqualTo(8);
-        assertThat(LogRedaction.MAXIMUM_NEEDLES).isEqualTo(64);
         assertThat(LogRedaction.WITHHELD).isEqualTo("<withheld>");
         assertThat(sub(null)).isEqualTo("(no message)");
         assertThat(sub("  ")).isEqualTo("(no message)");
