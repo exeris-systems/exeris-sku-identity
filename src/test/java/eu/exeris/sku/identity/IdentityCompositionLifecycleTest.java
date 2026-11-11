@@ -321,7 +321,7 @@ class IdentityCompositionLifecycleTest {
     }
 
     @Test
-    @DisplayName("A start whose initialize throws terminates the capabilities initialised before it and touches none after it")
+    @DisplayName("A start whose initialize throws terminates the capability that threw and the ones initialised before it, in reverse order, and touches none after it")
     void failedStartInInitialize() {
         Fixture fixture = new Fixture();
         fixture.hook("C").onInitialize = () -> {
@@ -331,7 +331,7 @@ class IdentityCompositionLifecycleTest {
         assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
 
         assertThat(fixture.snapshot()).containsExactly("initialize:A", "initialize:B", "initialize:C",
-                "terminate:B", "terminate:A");
+                "terminate:C", "terminate:B", "terminate:A");
     }
 
     @Test

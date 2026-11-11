@@ -304,7 +304,9 @@ class LogRedactionPropertyTest {
         }
         for (String secret : List.of("b", "ab", "\u00e9", "\u6f22\u6f22", "x1")) {
             assertThat(LogRedaction.of("password=" + secret, secret)).as(secret).isEqualTo("password=" + W);
-            assertThat(LogRedaction.of("x password: " + secret + "&y", secret)).as(secret).isEqualTo("x password: " + W + "&y");
+            // Not directly after '?', '&' or ';', so the value of a password name runs to the end of the line.
+            assertThat(LogRedaction.of("x password: " + secret + "&y", secret)).as(secret).isEqualTo("x password: " + W);
+            assertThat(LogRedaction.of("x?password=" + secret + "&y", secret)).as(secret).isEqualTo("x?password=" + W + "&y");
             assertThat(LogRedaction.of("jdbc:postgresql://u:" + secret + "@h/d", secret)).as(secret)
                     .isEqualTo("jdbc:postgresql://u:" + W + "@h/d");
         }
@@ -320,26 +322,50 @@ class LogRedactionPropertyTest {
 
     // ---- 21: labels -----------------------------------------------------------------------------------
 
+    private static boolean isPasswordName(String name) {
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("password") || lower.contains("passwd") || lower.contains("pwd") || lower.contains("passphrase");
+    }
+
     @Test
-    @DisplayName("A sensitive word inside a name, with any prefix, suffix or case, makes its value withheld")
+    @DisplayName("A sensitive word inside a name, with any prefix, suffix or case, makes its value withheld; a password name's unquoted value runs to the end of the line")
     void sensitiveWordsInNames() {
         for (String name : List.of("db_password", "X-Api-Key", "sslkey", "keyStorePassword", "client.secret",
                 "refresh_token", "PGPASSWORD", "SECRET", "x-auth-token", "Credentials", "app.credential.id",
-                "monkey", "PASSPHRASE", "my_pwd", "ApiKey", "tokenValue", "a-b_c.d-token-e")) {
-            assertThat(LogRedaction.of(name + "=value&n=1")).as(name).isEqualTo(name + "=" + W + "&n=1");
-            assertThat(LogRedaction.of("{" + name + ": value, n: 1}")).as(name).isEqualTo("{" + name + ": " + W + ", n: 1}");
+                "PASSPHRASE", "my_pwd", "ApiKey", "tokenValue", "a-b_c.d-token-e")) {
+            boolean toEndOfLine = isPasswordName(name);
+            assertThat(LogRedaction.of(name + "=value&n=1")).as(name)
+                    .isEqualTo(name + "=" + W + (toEndOfLine ? "" : "&n=1"));
+            assertThat(LogRedaction.of("{" + name + ": value, n: 1}")).as(name)
+                    .isEqualTo("{" + name + ": " + W + (toEndOfLine ? "" : ", n: 1}"));
             assertThat(LogRedaction.of(name + " = 'a b' x")).as(name).isEqualTo(name + " = '" + W + "' x");
         }
     }
 
     @Test
+    @DisplayName("A name that ends in the letters of a key word but not in a key word is not sensitive")
+    void keyLettersWithoutAKeyWord() {
+        assertThat(LogRedaction.of("monkey=value&n=1")).isEqualTo("monkey=value&n=1");
+        assertThat(LogRedaction.of("{monkey: value, n: 1}")).isEqualTo("{monkey: value, n: 1}");
+    }
+
+    @Test
     @DisplayName("Names that merely resemble a sensitive word are left as they are: auth, author, bypass, keepalive, pass")
     void resemblingNamesAreNotWithheld() {
-        for (String name : List.of("auth", "author", "bypass", "keepalive", "pass", "authorization", "authority",
-                "passthrough", "session", "user", "sid", "cookie")) {
+        for (String name : List.of("auth", "author", "bypass", "keepalive", "pass", "authority",
+                "passthrough", "session", "user", "sid")) {
             assertThat(LogRedaction.of(name + "=x")).as(name).isEqualTo(name + "=x");
             assertThat(LogRedaction.of(name + ": x")).as(name).isEqualTo(name + ": x");
         }
+    }
+
+    @Test
+    @DisplayName("authorization and cookie are credentials as header lines (a colon) and ordinary names with an equals sign")
+    void headerNamesAreHeadersOnlyWithAColon() {
+        assertThat(LogRedaction.of("authorization: x")).isEqualTo("authorization: " + W);
+        assertThat(LogRedaction.of("cookie: x")).isEqualTo("cookie: " + W);
+        assertThat(LogRedaction.of("authorization=x")).isEqualTo("authorization=x");
+        assertThat(LogRedaction.of("cookie=x")).isEqualTo("cookie=x");
     }
 
     @Test
@@ -348,32 +374,46 @@ class LogRedactionPropertyTest {
         assertThat(LogRedaction.of("Error: key: value")).isEqualTo("Error: key: " + W);
         assertThat(LogRedaction.of("db:\n  password: hunter2\n  user: u\n")).isEqualTo("db:\n  password: " + W + "\n  user: u\n");
         assertThat(LogRedaction.of("db.password=hunter2\ndb.user=u\n")).isEqualTo("db.password=" + W + "\ndb.user=u\n");
-        assertThat(LogRedaction.of("host=h user=u password=p dbname=d")).isEqualTo("host=h user=u password=" + W + " dbname=d");
-        assertThat(LogRedaction.of("{password=p, user=u}")).isEqualTo("{password=" + W + ", user=u}");
+        // A password name's unquoted value outside a URL query runs to the end of the line.
+        assertThat(LogRedaction.of("host=h user=u password=p dbname=d")).isEqualTo("host=h user=u password=" + W);
+        assertThat(LogRedaction.of("{password=p, user=u}")).isEqualTo("{password=" + W);
+        assertThat(LogRedaction.of("host=h password=p dbname=d\nuser=u")).isEqualTo("host=h password=" + W + "\nuser=u");
         assertThat(LogRedaction.of("X-Auth-Token: abc.def\r\nHost: h")).isEqualTo("X-Auth-Token: " + W + "\r\nHost: h");
         assertThat(LogRedaction.of("FATAL: password authentication failed for user \"x\""))
                 .isEqualTo("FATAL: password authentication failed for user \"x\"");
     }
 
     @Test
-    @DisplayName("A stack-trace line is cut only after a class name that holds a sensitive word and a colon")
+    @DisplayName("A stack-trace position is never cut, whatever the class or the file is called")
     void stackTraceLines() {
         assertThat(LogRedaction.of("at com.example.Loader.load(Loader.java:42)")).isEqualTo("at com.example.Loader.load(Loader.java:42)");
         assertThat(LogRedaction.of("at com.example.Loader.getPassword(Loader.java:42)"))
                 .isEqualTo("at com.example.Loader.getPassword(Loader.java:42)");
-        // over-withholding by the rule: the file name holds "key" and is followed by a colon
         assertThat(LogRedaction.of("at x.KeyStoreLoader.load(KeyStoreLoader.java:42)"))
-                .isEqualTo("at x.KeyStoreLoader.load(KeyStoreLoader.java:" + W + ")");
+                .isEqualTo("at x.KeyStoreLoader.load(KeyStoreLoader.java:42)");
+        assertThat(LogRedaction.of("at x.PasswordCheck.run(PasswordCheck.kt:7)")).isEqualTo("at x.PasswordCheck.run(PasswordCheck.kt:7)");
     }
 
     @Test
-    @DisplayName("Residual risk, pinned: a JSON body, an Authorization header, a cookie and a space-separated value are not found by the label rule")
+    @DisplayName("A JSON body, an Authorization header, a cookie and a --password flag are found by the label rule")
+    void shapesTheLabelRuleCovers() {
+        assertThat(LogRedaction.of("{\"password\":\"hunter2\",\"user\":\"u\"}")).isEqualTo("{\"password\":\"" + W + "\",\"user\":\"u\"}");
+        assertThat(LogRedaction.of("Authorization: Bearer abc.def.ghi")).isEqualTo("Authorization: Bearer " + W);
+        assertThat(LogRedaction.of("Authorization: Basic dXNlcjpwYXNz")).isEqualTo("Authorization: Basic " + W);
+        assertThat(LogRedaction.of("Cookie: sid=abc123")).isEqualTo("Cookie: " + W);
+        assertThat(LogRedaction.of("--password hunter2")).isEqualTo("--password " + W);
+    }
+
+    @Test
+    @DisplayName("Residual risk, pinned: prose, a short flag, a bare scheme and a value on the next line are not found by the label rule")
     void shapesTheLabelRuleDoesNotCover() {
-        assertThat(LogRedaction.of("{\"password\":\"hunter2\",\"user\":\"u\"}")).isEqualTo("{\"password\":\"hunter2\",\"user\":\"u\"}");
-        assertThat(LogRedaction.of("Authorization: Bearer abc.def.ghi")).isEqualTo("Authorization: Bearer abc.def.ghi");
-        assertThat(LogRedaction.of("Authorization: Basic dXNlcjpwYXNz")).isEqualTo("Authorization: Basic dXNlcjpwYXNz");
-        assertThat(LogRedaction.of("Cookie: sid=abc123")).isEqualTo("Cookie: sid=abc123");
-        assertThat(LogRedaction.of("--password hunter2")).isEqualTo("--password hunter2");
+        assertThat(LogRedaction.of("password is hunter2")).isEqualTo("password is hunter2");
+        assertThat(LogRedaction.of("password hunter2")).isEqualTo("password hunter2");
+        assertThat(LogRedaction.of("token hunter2")).isEqualTo("token hunter2");
+        assertThat(LogRedaction.of("-p hunter2")).isEqualTo("-p hunter2");
+        assertThat(LogRedaction.of("Bearer abc.def")).isEqualTo("Bearer abc.def");
+        assertThat(LogRedaction.of("password:\nhunter2")).isEqualTo("password:\nhunter2");
+        assertThat(LogRedaction.of("pass=hunter2")).isEqualTo("pass=hunter2");
     }
 
     @Test
