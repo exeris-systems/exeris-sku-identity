@@ -40,7 +40,7 @@ Embedding is through `IdentityComposition`: the host passes its strict `ServiceB
 
 - Revoking sessions (password change, reset, revoke-all) stops refresh, but access tokens already issued stay valid until they expire.
 - A session records the TCP peer address, which behind the required TLS terminator is the terminator's; trusted-proxy forwarding applies to rate limiting only.
-- The membership grant is an external call. A failure after it and before the commit can leave one grant for a subject that has no account; the next acceptance of the same invitation derives the same subject and finds the grant in place, and until then the grant opens nothing. A directory that writes through the joining executor (see [Host parts](docs/reference/configuration.md#host-parts)) takes part in the transaction and leaves nothing behind.
+- The membership grant is an external call. A failure after it and before the commit can leave one grant for a subject that has no account; the next acceptance of the same invitation derives the same subject and finds the grant in place, and until then the grant opens nothing. A directory that writes through the joining executor (see [Host parts and the service's transactions](docs/explanation/host-parts.md)) takes part in the transaction and leaves nothing behind.
 
 ## Not covered
 
@@ -70,7 +70,7 @@ The tests tagged `kernel-boot` boot the real kernel, which refuses to start with
 
 ## Documentation
 
-- [Run the service](docs/how-to/run-the-service.md), the [configuration](docs/reference/configuration.md), [launcher](docs/reference/launcher.md) and [HTTP API](docs/reference/http-api.md) references.
+- [Run the service](docs/how-to/run-the-service.md), the [configuration](docs/reference/configuration.md), [launcher](docs/reference/launcher.md) and [HTTP API](docs/reference/http-api.md) references, and [Host parts and the service's transactions](docs/explanation/host-parts.md).
 - [`AGENTS.md`](AGENTS.md) — the repository's operating contract and invariants.
 - [SKU conventions](https://github.com/exeris-systems/exeris-docs/blob/main/standards/sku-conventions.md) — the rules a Platform SKU repository follows.
 - [Capability licence registry](https://github.com/exeris-systems/exeris-docs/blob/main/cap-license-registry.md) — the licence value of every cap.
