@@ -298,23 +298,27 @@ class ServiceStopContractTest {
     }
 
     @Test
-    @DisplayName("E: admit(null) accepts nothing to run: the stop runs the withdrawal alone and a real action may still be admitted")
+    @DisplayName("E: admit(null) throws NullPointerException and leaves the state open: a real action is admitted afterwards, runs once, and the stop works")
     void admitNull() {
         AtomicInteger withdrawn = new AtomicInteger();
         AtomicInteger ran = new AtomicInteger();
         ServiceStop stop = new ServiceStop(withdrawn::incrementAndGet);
 
-        assertThat(stop.admit(null)).isTrue();
-        assertThat(stop.admit(ran::incrementAndGet)).as("null registered no action").isTrue();
+        assertThatThrownBy(() -> stop.admit(null)).isInstanceOf(NullPointerException.class);
+        assertThat(stop.admit(ran::incrementAndGet)).as("null registered nothing").isTrue();
         assertThat(stop.stop()).isNull();
 
         assertThat(ran).hasValue(1);
         assertThat(withdrawn).hasValue(1);
 
         ServiceStop onlyNull = new ServiceStop(withdrawn::incrementAndGet);
-        assertThat(onlyNull.admit(null)).isTrue();
-        assertThat(onlyNull.stop()).isNull();
+        assertThatThrownBy(() -> onlyNull.admit(null)).isInstanceOf(NullPointerException.class);
+        assertThat(onlyNull.stop()).as("a stop after a refused null runs the withdrawal alone").isNull();
         assertThat(withdrawn).hasValue(2);
+        assertThat(onlyNull.admit(ran::incrementAndGet)).as("and a stop that came first still refuses").isFalse();
+        assertThatThrownBy(() -> onlyNull.admit(null)).as("null is refused whatever the state")
+                .isInstanceOf(NullPointerException.class);
+        assertThat(ran).hasValue(1);
     }
 
     @Test
@@ -396,27 +400,217 @@ class ServiceStopContractTest {
                 .doesNotContain("stop-waiter", "stop-performer");
     }
 
-    /** A rule of the documented contract that the implementation does not keep; skipped unless asked for. */
-    @org.junit.jupiter.api.Nested
-    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    class KnownDefects {
+    // ---- the failures of the two actions -------------------------------------------------------------------
 
-        @Test
-        @DisplayName("A failure of the withdrawal, a VirtualMachineError included, does not skip the composition's stop")
-        void fatalErrorInTheWithdrawalStillStopsTheComposition() {
-            AtomicInteger composed = new AtomicInteger();
-            ServiceStop stop = new ServiceStop(() -> {
-                throw new InternalError("withdrawal");
+    /** What a stop did: what the performer got (thrown or returned), the waiters' results, and the state after. */
+    private record Performed(Throwable thrown, Throwable returned, AtomicInteger composed, List<Throwable> waiterResults) {
+    }
+
+    private static Performed performAgainstWaiters(Runnable withdrawal, Runnable composition) throws Exception {
+        AtomicInteger composed = new AtomicInteger();
+        CountDownLatch inWithdrawal = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ServiceStop stop = new ServiceStop(() -> {
+            inWithdrawal.countDown();
+            await(release);
+            withdrawal.run();
+        });
+        if (composition != null) {
+            stop.admit(() -> {
+                composed.incrementAndGet();
+                composition.run();
             });
-            stop.admit(composed::incrementAndGet);
-
-            try {
-                stop.stop();
-            } catch (InternalError expectedToPropagate) {
-                // whether it propagates is not what is under test
-            }
-
-            assertThat(composed).as("the composition's stop ran after the withdrawal failed").hasValue(1);
         }
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            Future<Object[]> performer = pool.submit(() -> {
+                try {
+                    return new Object[] {null, stop.stop()};
+                } catch (Throwable thrown) {
+                    return new Object[] {thrown, null};
+                }
+            });
+            assertThat(inWithdrawal.await(BOUND_SECONDS, TimeUnit.SECONDS)).isTrue();
+            List<Future<Throwable>> waiters = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                waiters.add(pool.submit(stop::stop));
+            }
+            for (int i = 0; i < 50; i++) {
+                Thread.sleep(2);
+            }
+            assertThat(waiters).as("waiters wait for the actions").noneMatch(Future::isDone);
+            release.countDown();
+
+            Object[] result = within(performer);
+            List<Throwable> waited = new ArrayList<>();
+            for (Future<Throwable> waiter : waiters) {
+                waited.add(within(waiter));
+            }
+            assertStopped(stop);
+            return new Performed((Throwable) result[0], (Throwable) result[1], composed, waited);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** A later stop returns at once and a later admission is refused. */
+    private static void assertStopped(ServiceStop stop) throws Exception {
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            assertThat(within(pool.submit(stop::stop))).as("a later stop").isNull();
+            AtomicInteger late = new AtomicInteger();
+            assertThat(stop.admit(late::incrementAndGet)).as("a later admission").isFalse();
+            assertThat(late).hasValue(0);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("A VirtualMachineError in the withdrawal: the composition's stop still runs, the waiters are released with null, then the error is rethrown to the performer only")
+    void fatalErrorInTheWithdrawal() throws Exception {
+        InternalError fatal = new InternalError("withdrawal");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw fatal;
+        }, () -> { });
+
+        assertThat(performed.composed()).as("the composition's stop ran").hasValue(1);
+        assertThat(performed.thrown()).isSameAs(fatal);
+        assertThat(performed.returned()).isNull();
+        assertThat(performed.waiterResults()).containsOnlyNulls().hasSize(2);
+        assertThat(fatal.getSuppressed()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("A VirtualMachineError in the withdrawal with no composition admitted is rethrown to the performer and the state is stopped")
+    void fatalErrorInTheWithdrawalWithNothingAdmitted() throws Exception {
+        InternalError fatal = new InternalError("withdrawal");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw fatal;
+        }, null);
+
+        assertThat(performed.thrown()).isSameAs(fatal);
+        assertThat(performed.waiterResults()).containsOnlyNulls();
+    }
+
+    @Test
+    @DisplayName("A RuntimeException in the withdrawal and a VirtualMachineError in the composition's stop: the VM error is thrown with the earlier failure suppressed onto it")
+    void fatalErrorAfterAnException() throws Exception {
+        IllegalStateException earlier = new IllegalStateException("withdrawal");
+        OutOfMemoryError fatal = new OutOfMemoryError("composition");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw earlier;
+        }, () -> {
+            throw fatal;
+        });
+
+        assertThat(performed.thrown()).isSameAs(fatal);
+        assertThat(fatal.getSuppressed()).containsExactly(earlier);
+        assertThat(performed.waiterResults()).containsOnlyNulls();
+    }
+
+    @Test
+    @DisplayName("An Error that is not a VirtualMachineError in the withdrawal and a VirtualMachineError in the composition's stop: the VM error is thrown with the Error suppressed")
+    void fatalErrorAfterAnOrdinaryError() throws Exception {
+        LinkageError earlier = new LinkageError("withdrawal");
+        StackOverflowError fatal = new StackOverflowError("composition");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw earlier;
+        }, () -> {
+            throw fatal;
+        });
+
+        assertThat(performed.thrown()).isSameAs(fatal);
+        assertThat(fatal.getSuppressed()).containsExactly(earlier);
+    }
+
+    @Test
+    @DisplayName("A VirtualMachineError in the withdrawal and another Error in the composition's stop: the VM error is kept and the other is suppressed onto it")
+    void fatalErrorFirstKeepsItsPlace() throws Exception {
+        OutOfMemoryError fatal = new OutOfMemoryError("withdrawal");
+        LinkageError later = new LinkageError("composition");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw fatal;
+        }, () -> {
+            throw later;
+        });
+
+        assertThat(performed.thrown()).isSameAs(fatal);
+        assertThat(fatal.getSuppressed()).containsExactly(later);
+        assertThat(performed.composed()).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("Two VirtualMachineErrors: the first is kept and the second is suppressed onto it")
+    void twoFatalErrors() throws Exception {
+        OutOfMemoryError first = new OutOfMemoryError("withdrawal");
+        InternalError second = new InternalError("composition");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw first;
+        }, () -> {
+            throw second;
+        });
+
+        assertThat(performed.thrown()).isSameAs(first);
+        assertThat(first.getSuppressed()).containsExactly(second);
+        assertThat(second.getSuppressed()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Two Errors that are not VM errors: the first is returned to the performer with the second suppressed onto it, nothing is thrown, the waiters get null")
+    void twoOrdinaryErrors() throws Exception {
+        NoClassDefFoundError first = new NoClassDefFoundError("withdrawal");
+        LinkageError second = new LinkageError("composition");
+
+        Performed performed = performAgainstWaiters(() -> {
+            throw first;
+        }, () -> {
+            throw second;
+        });
+
+        assertThat(performed.thrown()).isNull();
+        assertThat(performed.returned()).isSameAs(first);
+        assertThat(first.getSuppressed()).containsExactly(second);
+        assertThat(performed.waiterResults()).containsOnlyNulls();
+    }
+
+    @Test
+    @DisplayName("Two RuntimeExceptions: the first is returned with the second suppressed; an exception in the composition alone is returned as it is")
+    void twoExceptions() throws Exception {
+        IllegalStateException first = new IllegalStateException("withdrawal");
+        IllegalArgumentException second = new IllegalArgumentException("composition");
+
+        Performed both = performAgainstWaiters(() -> {
+            throw first;
+        }, () -> {
+            throw second;
+        });
+
+        assertThat(both.thrown()).isNull();
+        assertThat(both.returned()).isSameAs(first);
+        assertThat(first.getSuppressed()).containsExactly(second);
+
+        IllegalStateException only = new IllegalStateException("composition");
+        Performed alone = performAgainstWaiters(() -> { }, () -> {
+            throw only;
+        });
+
+        assertThat(alone.returned()).isSameAs(only);
+        assertThat(only.getSuppressed()).isEmpty();
     }
 }
