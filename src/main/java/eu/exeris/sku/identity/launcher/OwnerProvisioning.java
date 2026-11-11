@@ -1,15 +1,14 @@
 package eu.exeris.sku.identity.launcher;
 
 import eu.exeris.caps.credentialstore.api.CredentialProvisioning;
-import eu.exeris.kernel.spi.persistence.PersistenceConnection;
-import eu.exeris.kernel.spi.persistence.PersistenceStatement;
-import eu.exeris.kernel.spi.persistence.QueryResult;
+import eu.exeris.caps.credentialstore.api.model.ProvisionResult;
 import eu.exeris.sku.identity.auth.MembershipDirectory;
 import eu.exeris.sku.identity.auth.RoleScopes;
 import eu.exeris.sku.identity.auth.TenantScope;
 import eu.exeris.sku.identity.persistence.JoiningTransactionalExecutor;
 
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -17,14 +16,13 @@ import java.util.function.Supplier;
  * Creates the first account and, when the host keeps memberships, makes it the owner of a tenant, in one
  * transaction: either the account exists and holds the role, or nothing was written.
  *
- * <p>Two runs against one empty database are serialised by a transaction-scoped advisory lock taken as the
- * first statement of the unit. The run that gets the lock second starts its emptiness check after the first
- * has committed or rolled back, so it sees the account or finds the table still empty.
+ * <p>Whether an account already exists is decided by the credential store, not here:
+ * {@link CredentialProvisioning#provisionFirstVerified} checks and inserts atomically against every
+ * concurrent writer of credentials. Its call is the first statement of the unit, so its exclusion holds at
+ * any isolation level; the unit runs at read committed in any case, the only level the joining executor
+ * admits. The membership grant follows it in the same transaction and commits or rolls back with it.
  */
 final class OwnerProvisioning {
-
-    /** The advisory lock key; distinct from the migrations' key. */
-    static final long ADVISORY_LOCK_KEY = 0x1D3A_7157_0000_0002L;
 
     /** What a run did. */
     sealed interface Outcome permits Provisioned, AccountsExist {
@@ -39,13 +37,20 @@ final class OwnerProvisioning {
     record Provisioned(UUID subjectId, UUID tenantId) implements Outcome {
     }
 
-    /** An account existed once the lock was held; nothing was written. */
+    /** The deployment already held an account; nothing was written. */
     record AccountsExist() implements Outcome {
     }
 
     /** The credential store refused the address. It carries no message, so the address cannot leak. */
     static final class InvalidLoginIdentifier extends RuntimeException {
         InvalidLoginIdentifier() {
+            super(null, null, false, false);
+        }
+    }
+
+    /** The credential table is under row-level security, so no deployment-wide answer exists. No message. */
+    static final class CredentialTableUnderRowLevelSecurity extends RuntimeException {
+        CredentialTableUnderRowLevelSecurity() {
             super(null, null, false, false);
         }
     }
@@ -66,22 +71,27 @@ final class OwnerProvisioning {
      * @param subjectId    the id of the new account, chosen once by the caller
      * @return the outcome
      * @throws InvalidLoginIdentifier when the credential store refuses the address; nothing was written
+     * @throws CredentialTableUnderRowLevelSecurity when the credential store refuses to answer for a table
+     *                                              under row-level security; nothing was written
      */
     static Outcome provision(JoiningTransactionalExecutor tx, CredentialProvisioning provisioning,
                              MembershipDirectory directory, String email, char[] password, UUID tenantId,
                              UUID subjectId) {
         Supplier<Outcome> work = () -> {
-            tx.executeManaged(connection -> lock(connection));
-            if (anyAccount(tx)) {
-                return new AccountsExist();
-            }
             char[] attempt = password.clone();
+            Optional<ProvisionResult> created;
             try {
-                provisioning.provisionVerified(subjectId, email, attempt);
+                // The first statement of the unit: nothing is read or written before it.
+                created = provisioning.provisionFirstVerified(subjectId, email, attempt);
             } catch (IllegalArgumentException e) {
                 throw new InvalidLoginIdentifier();
+            } catch (IllegalStateException e) {
+                throw new CredentialTableUnderRowLevelSecurity();
             } finally {
                 Arrays.fill(attempt, '\0');
+            }
+            if (created.isEmpty()) {
+                return new AccountsExist();
             }
             if (directory != null) {
                 directory.grant(tenantId, subjectId, RoleScopes.OWNER);
@@ -92,21 +102,5 @@ final class OwnerProvisioning {
         return tenantId == null
                 ? tx.inTransaction(work)
                 : TenantScope.call(tenantId, () -> tx.inTransaction(work));
-    }
-
-    private static void lock(PersistenceConnection connection) {
-        try (QueryResult ignored = connection.executeQuery("SELECT pg_advisory_xact_lock(" + ADVISORY_LOCK_KEY + ")")) {
-            // the lock is held until the transaction ends
-        }
-    }
-
-    private static boolean anyAccount(JoiningTransactionalExecutor tx) {
-        return tx.query(connection -> {
-            try (PersistenceStatement statement = connection.prepare(
-                    "SELECT count(*) FROM (SELECT 1 FROM credential_records LIMIT 1) AS found");
-                 QueryResult rows = statement.executeQuery()) {
-                return rows.next() && rows.row().getLong(0) > 0;
-            }
-        });
     }
 }

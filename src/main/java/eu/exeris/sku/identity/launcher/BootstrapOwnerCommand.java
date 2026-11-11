@@ -5,6 +5,7 @@ import eu.exeris.kernel.community.security.Argon2idPasswordEncoder;
 import eu.exeris.kernel.core.bootstrap.KernelBootstrap;
 import eu.exeris.kernel.spi.bootstrap.BootstrapSelector;
 import eu.exeris.kernel.spi.context.KernelProviders;
+import eu.exeris.kernel.spi.exceptions.persistence.PersistenceProviderException;
 import eu.exeris.sku.identity.IdentityComposition;
 import eu.exeris.sku.identity.config.IdentityConfigException;
 
@@ -19,11 +20,12 @@ import java.util.UUID;
  * The {@code bootstrap-owner} subcommand: creates the first verified account on a migrated database that
  * holds none, and makes it the owner of a tenant when the host keeps memberships.
  *
- * <p>Everything that can be refused is refused before the kernel boots, using plain database reads as the
- * service role: configuration, the password file, the role, the migrated schema and the emptiness of the
- * account table. Only the write needs the kernel's transactional executor, so the kernel boots its
- * persistence and scheduling subsystems and no listener. The composition is built and never started, so no
- * job runs and no signing key is touched, and no token is issued.
+ * <p>Configuration, the password file and the service role are checked before the kernel boots, with plain
+ * database reads as the service role. Whether the schema is migrated and whether an account exists are the
+ * credential store's to answer, through its provisioning API, so those two refusals come from inside the
+ * transaction and need the kernel to have booted. The kernel boots its persistence and scheduling subsystems
+ * and no listener. The composition is built and never started, so no job runs and no signing key is touched,
+ * and no token is issued.
  *
  * <p>The command runs on one thread: the pre-checks, the kernel's callback and the mapping of the outcome to
  * a status all execute on the caller's thread, one after the other.
@@ -31,6 +33,11 @@ import java.util.UUID;
 final class BootstrapOwnerCommand {
 
     private static final System.Logger LOG = System.getLogger(BootstrapOwnerCommand.class.getName());
+
+    /** SQLSTATE of a relation that does not exist. */
+    private static final String UNDEFINED_TABLE = "42P01";
+    /** SQLSTATE of a relation the role may not use. */
+    private static final String INSUFFICIENT_PRIVILEGE = "42501";
 
     private BootstrapOwnerCommand() {
     }
@@ -67,19 +74,6 @@ final class BootstrapOwnerCommand {
             } catch (IdentityConfigException e) {
                 LOG.log(System.Logger.Level.ERROR, "Owner bootstrap refused, nothing changed: {0}", e.getMessage());
                 return IdentitySkuApplication.EXIT_CONFIG;
-            }
-            switch (DatabaseState.inspect(plan.database())) {
-                case NOT_MIGRATED -> {
-                    LOG.log(System.Logger.Level.ERROR, "The schema is not migrated for this service role: run "
-                            + "migrate first. Nothing changed.");
-                    return IdentitySkuApplication.EXIT_NOT_MIGRATED;
-                }
-                case HAS_ACCOUNTS -> {
-                    return accountsExist();
-                }
-                case EMPTY -> {
-                    // proceed
-                }
             }
             return provision(plan, settings, password);
         } catch (SQLException e) {
@@ -150,13 +144,44 @@ final class BootstrapOwnerCommand {
                     BootstrapOwnerSettings.EMAIL);
             return IdentitySkuApplication.EXIT_CONFIG;
         }
+        if (failure instanceof OwnerProvisioning.CredentialTableUnderRowLevelSecurity) {
+            LOG.log(System.Logger.Level.ERROR, "The credential table must not be under row-level security: the "
+                    + "first account is decided for the whole deployment. Nothing changed.");
+            return IdentitySkuApplication.EXIT_CONFIG;
+        }
         if (failure instanceof CredentialAlreadyExistsException) {
             return accountsExist();
+        }
+        if (schemaUnusable(failure)) {
+            LOG.log(System.Logger.Level.ERROR, "The schema is not migrated for this service role: run "
+                    + "migrate first. Nothing changed.");
+            return IdentitySkuApplication.EXIT_NOT_MIGRATED;
         }
         // A host directory's message is not ours to print.
         LOG.log(System.Logger.Level.ERROR, "The owner account was not created and nothing was committed ({0})",
                 failure.getClass().getName());
         return IdentitySkuApplication.EXIT_NOT_COMPLETED;
+    }
+
+    /** Whether the database reported an undefined table or insufficient privilege anywhere in the chain. */
+    private static boolean schemaUnusable(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql && isSchemaState(sql.getSQLState())) {
+                return true;
+            }
+            if (t instanceof PersistenceProviderException ppe && ppe.rawArgs().length > 0
+                    && ppe.rawArgs()[0] instanceof String state && isSchemaState(state)) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isSchemaState(String sqlState) {
+        return UNDEFINED_TABLE.equals(sqlState) || INSUFFICIENT_PRIVILEGE.equals(sqlState);
     }
 
     private static int accountsExist() {
