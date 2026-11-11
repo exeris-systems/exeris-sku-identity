@@ -48,7 +48,7 @@ class ServeInterruptTimingIT {
 
     /** The password encoder the callback builds first refuses to be built on an interrupted thread. */
     @Test
-    @DisplayName("As soon as the kernel calls back, known defect (run with -Didentity.knownDefects=true): status 0, never served, health never 200, the flag still set")
+    @DisplayName("As soon as the kernel calls back: status 0, never served, health never 200, the flag still set")
     void atTheKernelCallback() throws Exception {
         int[] port = new int[1];
         String output = run(InterruptTimingMain.CALLBACK, InMemoryMembershipDirectory.class.getName(), Map.of(), port);
@@ -58,9 +58,9 @@ class ServeInterruptTimingIT {
         assertThat(output).doesNotContain(ServeSupport.RUNNING_LINE).contains("EVER_HEALTHY=false");
     }
 
-    /** A rule of the contract that the launcher does not keep: the kernel refuses to boot on an interrupted thread. */
+    /** The kernel refuses to boot on an interrupted thread; that refusal is a stop, not a failure. */
     @Test
-    @DisplayName("Before the call, known defect (run with -Didentity.knownDefects=true): status 0, never served, health never 200, the flag still set")
+    @DisplayName("Before the call: status 0, never served, health never 200, the flag still set")
     void beforeTheCall() throws Exception {
         int[] port = new int[1];
         String output = run(InterruptTimingMain.ENTRY, InMemoryMembershipDirectory.class.getName(), Map.of(), port);
