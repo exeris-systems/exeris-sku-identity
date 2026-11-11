@@ -84,6 +84,7 @@ public final class IdentityComposition {
     private final JoiningTransactionalExecutor transactions;
     private State state = State.BUILT;
     private boolean startAttempted;
+    private boolean startFailed;
 
     /**
      * BUILT, then STARTING, STARTED, STOPPING, STOPPED. Every transition happens under this object's
@@ -123,17 +124,31 @@ public final class IdentityComposition {
      * first is final, so the call is refused rather than ignored, because an embedding host that asked for a
      * stop and then started the service would otherwise be left with a service nothing will stop.
      *
-     * @throws IllegalStateException when the composition has been started or has been stopped
+     * <p>A capability whose {@code initialize} threw is terminated with the ones initialised before it:
+     * {@code CapabilityLifecycleHooks#terminate()} is owed to every capability that entered
+     * {@code initialize}, whether or not it completed, and a half-initialised capability is the one most
+     * likely to hold something to release. A capability that was never reached is not terminated. Nothing has
+     * been served when a start fails, so the capabilities are terminated without a drain.
+     *
+     * @throws IllegalStateException when the composition has been started, when its start failed, or when it
+     *                               has been stopped; the message says which
      * @throws Exception the failure of the capability that did not start
      */
     public synchronized void start() throws Exception {
+        if (state == State.BUILT) {
+            beginStart();
+            return;
+        }
         if (state == State.STOPPED && !startAttempted) {
-            throw new IllegalStateException("the composition has been stopped");
+            throw new IllegalStateException("the composition has been stopped before it was started");
         }
-        if (state != State.BUILT) {
-            throw new IllegalStateException("the composition has been started");
+        if (startFailed) {
+            throw new IllegalStateException("the composition's start failed and it was stopped; a composition "
+                    + "is started at most once");
         }
-        beginStart();
+        throw new IllegalStateException(state == State.STOPPED
+                ? "the composition has been started and stopped; a composition is started at most once"
+                : "the composition has been started");
     }
 
     /**
@@ -142,8 +157,12 @@ public final class IdentityComposition {
      * the composition's monitor, so a stop either precedes it, and nothing starts, or follows it, and waits
      * for the start to finish and then stops what started.
      *
+     * <p>The result is {@code false} exactly when the composition was stopped before it was ever started.
+     * A composition whose start failed, or that was started and then stopped, cannot be started again and
+     * the call throws, as {@link #start()} does: its state says nothing about a pending stop request.
+     *
      * @return {@code true} when the composition started; {@code false} when a stop came first
-     * @throws IllegalStateException when the composition has already been started
+     * @throws IllegalStateException when the composition has already been started, or its start failed
      * @throws Exception the failure of the capability that did not start
      */
     public synchronized boolean tryStart() throws Exception {
@@ -157,19 +176,27 @@ public final class IdentityComposition {
     private void beginStart() throws Exception {
         startAttempted = true;
         state = State.STARTING;
-        int initialised = 0;
+        int entered = 0;
         try {
             for (CapabilityLifecycleHooks module : readyOrder) {
+                entered++;
                 module.initialize();
-                initialised++;
             }
             for (CapabilityLifecycleHooks module : readyOrder) {
                 module.ready();
             }
             state = State.STARTED;
         } catch (Exception | Error failure) {
-            terminateFirst(initialised);
+            startFailed = true;
+            Error cleanup = terminateFirst(entered);
             state = State.STOPPED;
+            if (cleanup instanceof VirtualMachineError && !(failure instanceof VirtualMachineError)) {
+                cleanup.addSuppressed(failure);
+                throw cleanup;
+            }
+            if (cleanup != null) {
+                failure.addSuppressed(cleanup);
+            }
             throw failure;
         }
     }
@@ -180,7 +207,13 @@ public final class IdentityComposition {
      * afterwards. A stop that arrives while another thread is starting waits for the start to finish and then
      * stops what started. Stopping a stopped composition does nothing.
      *
+     * <p>Every capability is drained and then terminated whatever an earlier one threw: an exception from a
+     * drain or a terminate is logged, and an {@link Error} is remembered and rethrown after the last
+     * capability has been terminated, the first one with the later ones suppressed, so that a capability whose
+     * class cannot be loaded does not leave the ones after it holding their resources.
+     *
      * @param drainTimeout how long each capability may take to drain in-flight work
+     * @throws Error the first {@code Error} a drain or a terminate threw, after all have been attempted
      */
     public synchronized void stop(Duration drainTimeout) {
         if (state == State.BUILT) {
@@ -191,6 +224,7 @@ public final class IdentityComposition {
             return;
         }
         state = State.STOPPING;
+        Error failure = null;
         try {
             for (int i = readyOrder.size() - 1; i >= 0; i--) {
                 try {
@@ -198,15 +232,28 @@ public final class IdentityComposition {
                 } catch (Exception e) {
                     System.getLogger(IdentityComposition.class.getName())
                             .log(System.Logger.Level.WARNING, "draining a capability failed", e);
+                } catch (Error e) {
+                    failure = remember(failure, e);
                 }
             }
-            terminateFirst(readyOrder.size());
+            failure = remember(failure, terminateFirst(readyOrder.size()));
         } finally {
             state = State.STOPPED;
         }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
-    private void terminateFirst(int count) {
+    /**
+     * Terminates the first {@code count} capabilities in reverse order, every one of them whatever an
+     * earlier one threw.
+     *
+     * @return the first {@link Error} a terminate threw, with the later ones suppressed; {@code null} when
+     *         there was none. A {@link RuntimeException} is logged and goes no further.
+     */
+    private Error terminateFirst(int count) {
+        Error failure = null;
         for (int i = count - 1; i >= 0; i--) {
             CapabilityLifecycleHooks module = readyOrder.get(i);
             try {
@@ -214,8 +261,29 @@ public final class IdentityComposition {
             } catch (RuntimeException e) {
                 System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
                         "terminating {0} failed: {1}", module.getClass().getSimpleName(), e.getMessage());
+            } catch (Error e) {
+                System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
+                        "terminating {0} failed: {1}", module.getClass().getSimpleName(), e.getClass().getName());
+                failure = remember(failure, e);
             }
         }
+        return failure;
+    }
+
+    /** Keeps the first failure and attaches a later one to it; a fatal VM error takes the first place. */
+    private static Error remember(Error first, Error next) {
+        if (next == null || next == first) {
+            return first;
+        }
+        if (first == null) {
+            return next;
+        }
+        if (next instanceof VirtualMachineError && !(first instanceof VirtualMachineError)) {
+            next.addSuppressed(first);
+            return next;
+        }
+        first.addSuppressed(next);
+        return first;
     }
 
     /** The strict route registry; it is frozen once {@link #start()} has completed. */
