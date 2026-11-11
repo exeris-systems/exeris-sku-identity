@@ -86,6 +86,7 @@ class IdentityCompositionLifecycleTest {
         volatile Action onReady = () -> { };
         volatile Action onDrain = () -> { };
         volatile Action onTerminate = () -> { };
+        final List<Duration> drainBudgets = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         Hook(String name, List<String> log) {
             this.name = name;
@@ -107,6 +108,7 @@ class IdentityCompositionLifecycleTest {
         @Override
         public void drain(Duration timeout) throws Exception {
             log.add("drain:" + name);
+            drainBudgets.add(timeout);
             onDrain.run();
         }
 
@@ -288,7 +290,7 @@ class IdentityCompositionLifecycleTest {
     // ---- 14 --------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("A start whose ready throws terminates what was initialised, ends stopped, refuses start and tryStart, and a stop does nothing")
+    @DisplayName("A start whose ready throws drains every capability, then terminates every one, ends stopped, refuses start and tryStart, and a stop does nothing")
     void failedStartInReady() {
         Fixture fixture = new Fixture();
         IllegalStateException failure = new IllegalStateException("ready C");
@@ -299,7 +301,8 @@ class IdentityCompositionLifecycleTest {
         assertThatThrownBy(fixture.composition::start).isSameAs(failure);
 
         List<String> expected = List.of("initialize:A", "initialize:B", "initialize:C", "initialize:D",
-                "ready:A", "ready:B", "ready:C", "terminate:D", "terminate:C", "terminate:B", "terminate:A");
+                "ready:A", "ready:B", "ready:C", "drain:D", "drain:C", "drain:B", "drain:A",
+                "terminate:D", "terminate:C", "terminate:B", "terminate:A");
         assertThat(fixture.snapshot()).containsExactlyElementsOf(expected);
         assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(fixture.composition::tryStart).isInstanceOf(IllegalStateException.class);
@@ -321,7 +324,7 @@ class IdentityCompositionLifecycleTest {
     }
 
     @Test
-    @DisplayName("A start whose initialize throws terminates the capability that threw and the ones initialised before it, in reverse order, and touches none after it")
+    @DisplayName("A start whose initialize throws drains the ones that completed it, then terminates the one that threw and those before it, in reverse order, and touches none after it")
     void failedStartInInitialize() {
         Fixture fixture = new Fixture();
         fixture.hook("C").onInitialize = () -> {
@@ -331,7 +334,7 @@ class IdentityCompositionLifecycleTest {
         assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
 
         assertThat(fixture.snapshot()).containsExactly("initialize:A", "initialize:B", "initialize:C",
-                "terminate:C", "terminate:B", "terminate:A");
+                "drain:B", "drain:A", "terminate:C", "terminate:B", "terminate:A");
     }
 
     @Test
@@ -647,32 +650,6 @@ class IdentityCompositionLifecycleTest {
     }
 
     @Test
-    @DisplayName("A start that fails in the first, in a middle and in the last initialize terminates that capability and the earlier ones in reverse, never a later one")
-    void failedInitializeAtEveryPosition() {
-        for (String failing : List.of("A", "B", "C", "D")) {
-            Fixture fixture = new Fixture();
-            fixture.hook(failing).onInitialize = () -> {
-                throw new IllegalStateException("initialize " + failing);
-            };
-
-            assertThatThrownBy(fixture.composition::start).hasMessage("initialize " + failing);
-
-            List<String> expected = new ArrayList<>();
-            for (String name : List.of("A", "B", "C", "D")) {
-                expected.add("initialize:" + name);
-                if (name.equals(failing)) {
-                    break;
-                }
-            }
-            for (int i = expected.size() - 1; i >= 0; i--) {
-                expected.add("terminate:" + expected.get(i).substring("initialize:".length()));
-            }
-            assertThat(fixture.snapshot()).as(failing).containsExactlyElementsOf(expected);
-            assertThat(fixture.entries("ready")).as(failing).isEmpty();
-        }
-    }
-
-    @Test
     @DisplayName("The messages say which of the three endings refused the start, and tryStart is false only for a stop that came first")
     void messagesAndTryStart() throws Exception {
         Fixture stoppedFirst = new Fixture();
@@ -711,38 +688,280 @@ class IdentityCompositionLifecycleTest {
         running.composition.stop(DRAIN);
     }
 
-    /** The unwind the capability lifecycle contract describes for a failed start; the composition does not do it. */
+    private static final List<String> NAMES = List.of("A", "B", "C", "D");
+
+    /** The calls of a start that fails at the {@code position}-th capability (0-based) of the given phase. */
+    private static List<String> expectedUnwind(int position, boolean inInitialize) {
+        List<String> expected = new ArrayList<>();
+        int drained;
+        if (inInitialize) {
+            for (int i = 0; i <= position; i++) {
+                expected.add("initialize:" + NAMES.get(i));
+            }
+            drained = position - 1;
+        } else {
+            NAMES.forEach(name -> expected.add("initialize:" + name));
+            for (int i = 0; i <= position; i++) {
+                expected.add("ready:" + NAMES.get(i));
+            }
+            drained = NAMES.size() - 1;
+        }
+        for (int i = drained; i >= 0; i--) {
+            expected.add("drain:" + NAMES.get(i));
+        }
+        for (int i = inInitialize ? position : NAMES.size() - 1; i >= 0; i--) {
+            expected.add("terminate:" + NAMES.get(i));
+        }
+        return expected;
+    }
+
+    @Test
+    @DisplayName("A start that fails in initialize at each of four positions drains the completed prefix in reverse, never the one that threw, then terminates it and the prefix in reverse")
+    void failedInitializeAtEveryPosition() {
+        for (int position = 0; position < NAMES.size(); position++) {
+            String failing = NAMES.get(position);
+            Fixture fixture = new Fixture();
+            fixture.hook(failing).onInitialize = () -> {
+                throw new IllegalStateException("initialize " + failing);
+            };
+
+            assertThatThrownBy(fixture.composition::start).hasMessage("initialize " + failing);
+
+            assertThat(fixture.snapshot()).as(failing).containsExactlyElementsOf(expectedUnwind(position, true));
+            assertThat(fixture.entries("ready")).as(failing).isEmpty();
+            assertThatThrownBy(fixture.composition::tryStart).as(failing).isInstanceOf(IllegalStateException.class);
+            fixture.composition.stop(DRAIN);
+            assertThat(fixture.snapshot()).as("%s: a stop after the failed start does nothing", failing)
+                    .containsExactlyElementsOf(expectedUnwind(position, true));
+        }
+    }
+
+    @Test
+    @DisplayName("A start that fails in ready at each of four positions drains every capability, the one whose ready threw included, in reverse, then terminates every one in reverse")
+    void failedReadyAtEveryPosition() {
+        for (int position = 0; position < NAMES.size(); position++) {
+            String failing = NAMES.get(position);
+            Fixture fixture = new Fixture();
+            fixture.hook(failing).onReady = () -> {
+                throw new IllegalStateException("ready " + failing);
+            };
+
+            assertThatThrownBy(fixture.composition::start).hasMessage("ready " + failing);
+
+            assertThat(fixture.snapshot()).as(failing).containsExactlyElementsOf(expectedUnwind(position, false));
+            fixture.composition.stop(DRAIN);
+            assertThat(fixture.snapshot()).as("%s: a stop after the failed start does nothing", failing)
+                    .containsExactlyElementsOf(expectedUnwind(position, false));
+        }
+    }
+
+    @Test
+    @DisplayName("An Error thrown by a drain during the unwind of a failed start, at each position, stops neither the remaining drains nor any terminate, and is suppressed onto the start failure")
+    void drainErrorDuringTheUnwindOfAFailedStart() {
+        for (boolean inInitialize : List.of(true, false)) {
+            for (int position = 0; position < NAMES.size(); position++) {
+                for (String erring : NAMES) {
+                    String failing = NAMES.get(position);
+                    List<String> expected = expectedUnwind(position, inInitialize);
+                    if (!expected.contains("drain:" + erring)) {
+                        continue;
+                    }
+                    String what = (inInitialize ? "initialize " : "ready ") + failing + ", drain error in " + erring;
+                    Fixture fixture = new Fixture();
+                    IllegalStateException failure = new IllegalStateException(what);
+                    NoClassDefFoundError cleanup = new NoClassDefFoundError(what);
+                    if (inInitialize) {
+                        fixture.hook(failing).onInitialize = () -> {
+                            throw failure;
+                        };
+                    } else {
+                        fixture.hook(failing).onReady = () -> {
+                            throw failure;
+                        };
+                    }
+                    fixture.hook(erring).onDrain = () -> {
+                        throw cleanup;
+                    };
+
+                    assertThatThrownBy(fixture.composition::start).as(what).isSameAs(failure);
+
+                    assertThat(fixture.snapshot()).as(what).containsExactlyElementsOf(expected);
+                    assertThat(failure.getSuppressed()).as(what).containsExactly(cleanup);
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("A drain that throws an exception during the unwind of a failed start is logged and goes no further: the start failure is thrown without suppressed, and the rest is drained and terminated")
+    void drainExceptionDuringTheUnwindOfAFailedStart() {
+        Fixture fixture = new Fixture();
+        IllegalStateException failure = new IllegalStateException("ready D");
+        fixture.hook("D").onReady = () -> {
+            throw failure;
+        };
+        fixture.hook("C").onDrain = () -> {
+            throw new IllegalStateException("drain C");
+        };
+
+        assertThatThrownBy(fixture.composition::start).isSameAs(failure);
+
+        assertThat(failure.getSuppressed()).isEmpty();
+        assertThat(fixture.snapshot()).containsExactlyElementsOf(expectedUnwind(3, false));
+    }
+
+    /** What a start failure and the cleanup's Errors must come to: the thrown Throwable and what it carries. */
+    @Test
+    @DisplayName("Precedence over every kind of start failure and cleanup Error: the start failure is thrown with the cleanup Error suppressed, except that a cleanup VirtualMachineError takes its place against a start failure that is not one")
+    void precedenceOfTheStartFailureAndTheCleanup() {
+        List<java.util.function.Supplier<Throwable>> starts = List.of(
+                () -> new IllegalStateException("start"),
+                () -> new NoClassDefFoundError("start"),
+                () -> new StackOverflowError("start"));
+        List<java.util.function.Supplier<Error>> ordinary = List.of(() -> new LinkageError("cleanup"));
+        List<java.util.function.Supplier<Error>> fatal = List.of(() -> new OutOfMemoryError("cleanup"));
+
+        for (int s = 0; s < starts.size(); s++) {
+            for (String where : List.of("drain", "terminate")) {
+                for (boolean isFatal : List.of(false, true)) {
+                    Throwable start = starts.get(s).get();
+                    Error cleanup = (isFatal ? fatal : ordinary).get(0).get();
+                    String what = "start #" + s + ", " + (isFatal ? "fatal " : "ordinary ") + where;
+                    Fixture fixture = new Fixture();
+                    fixture.hook("D").onReady = () -> {
+                        throw sneaky(start);
+                    };
+                    Action throwCleanup = () -> {
+                        throw cleanup;
+                    };
+                    if (where.equals("drain")) {
+                        fixture.hook("B").onDrain = throwCleanup;
+                    } else {
+                        fixture.hook("B").onTerminate = throwCleanup;
+                    }
+
+                    Throwable thrown = catchThrowable(fixture.composition::start);
+
+                    boolean cleanupWins = isFatal && !(start instanceof VirtualMachineError);
+                    if (cleanupWins) {
+                        assertThat(thrown).as(what).isSameAs(cleanup);
+                        assertThat(cleanup.getSuppressed()).as(what).containsExactly(start);
+                        assertThat(start.getSuppressed()).as(what).isEmpty();
+                    } else {
+                        assertThat(thrown).as(what).isSameAs(start);
+                        assertThat(start.getSuppressed()).as(what).containsExactly(cleanup);
+                        assertThat(cleanup.getSuppressed()).as(what).isEmpty();
+                    }
+                    assertThat(fixture.snapshot()).as(what).containsExactlyElementsOf(expectedUnwind(3, false));
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Two cleanup Errors in one unwind: the first is kept with the later one suppressed on it, and the start failure carries that one; a cleanup VirtualMachineError after an ordinary Error takes the first place and carries it")
+    void twoCleanupErrors() {
+        Fixture ordinary = new Fixture();
+        IllegalStateException failure = new IllegalStateException("ready D");
+        NoClassDefFoundError firstCleanup = new NoClassDefFoundError("drain C");
+        LinkageError secondCleanup = new LinkageError("terminate A");
+        ordinary.hook("D").onReady = () -> {
+            throw failure;
+        };
+        ordinary.hook("C").onDrain = () -> {
+            throw firstCleanup;
+        };
+        ordinary.hook("A").onTerminate = () -> {
+            throw secondCleanup;
+        };
+
+        assertThatThrownBy(ordinary.composition::start).isSameAs(failure);
+
+        assertThat(failure.getSuppressed()).containsExactly(firstCleanup);
+        assertThat(firstCleanup.getSuppressed()).containsExactly(secondCleanup);
+
+        Fixture fatal = new Fixture();
+        IllegalStateException failure2 = new IllegalStateException("ready D");
+        NoClassDefFoundError earlier = new NoClassDefFoundError("drain C");
+        OutOfMemoryError later = new OutOfMemoryError("terminate A");
+        fatal.hook("D").onReady = () -> {
+            throw failure2;
+        };
+        fatal.hook("C").onDrain = () -> {
+            throw earlier;
+        };
+        fatal.hook("A").onTerminate = () -> {
+            throw later;
+        };
+
+        assertThatThrownBy(fatal.composition::start).isSameAs(later);
+
+        assertThat(later.getSuppressed()).hasSize(2).contains(failure2, earlier);
+        assertThat(fatal.snapshot()).containsExactlyElementsOf(expectedUnwind(3, false));
+    }
+
+    @Test
+    @DisplayName("Each capability drained by the unwind of a failed start is given a positive time within the 30 s composition-wide budget the conductor allows by default")
+    void drainBudgetOfAFailedStart() {
+        Fixture fixture = new Fixture();
+        fixture.hook("C").onReady = () -> {
+            throw new IllegalStateException("ready C");
+        };
+
+        assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
+
+        for (Hook hook : fixture.hooks) {
+            assertThat(hook.drainBudgets).as(hook.name).hasSize(1);
+            assertThat(hook.drainBudgets.get(0)).as(hook.name).isPositive().isLessThanOrEqualTo(Duration.ofSeconds(30));
+        }
+    }
+
+    private static Throwable catchThrowable(Action action) {
+        try {
+            action.run();
+            return null;
+        } catch (Throwable thrown) {
+            return thrown;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> RuntimeException sneaky(Throwable throwable) throws T {
+        throw (T) throwable;
+    }
+
+    /** What the capability contract says a drain that overruns its time does: it is abandoned and the unwind proceeds. */
     @org.junit.jupiter.api.Nested
     @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     class KnownDefects {
 
         @Test
-        @DisplayName("A failed initialize drains the capabilities that completed it, in reverse order, then terminates the failing one and them")
-        void failedInitializeDrainsThePrefixThenTerminates() {
+        @DisplayName("A drain that sleeps past its budget does not hold the unwind of a failed start: the later capabilities are still drained and terminated")
+        void overrunningDrainIsAbandoned() throws Exception {
             Fixture fixture = new Fixture();
-            fixture.hook("C").onInitialize = () -> {
-                throw new IllegalStateException("initialize C");
+            fixture.hook("D").onReady = () -> {
+                throw new IllegalStateException("ready D");
             };
+            fixture.hook("C").onDrain = () -> Thread.sleep(Duration.ofSeconds(120));
+            ExecutorService pool = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "overrunning-start");
+                thread.setDaemon(true);
+                return thread;
+            });
+            try {
+                Future<Object> starting = pool.submit(() -> catchThrowable(fixture.composition::start));
 
-            assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
+                Object outcome = starting.get(5 + 10, TimeUnit.SECONDS);
 
-            assertThat(fixture.snapshot()).containsExactly("initialize:A", "initialize:B", "initialize:C",
-                    "drain:B", "drain:A", "terminate:C", "terminate:B", "terminate:A");
-        }
-
-        @Test
-        @DisplayName("A failed ready drains every capability in reverse order, then terminates every one")
-        void failedReadyDrainsEverythingThenTerminates() {
-            Fixture fixture = new Fixture();
-            fixture.hook("B").onReady = () -> {
-                throw new IllegalStateException("ready B");
-            };
-
-            assertThatThrownBy(fixture.composition::start).isInstanceOf(IllegalStateException.class);
-
-            assertThat(fixture.entries("drain")).containsExactlyElementsOf(ALL_DRAINS);
-            List<String> snapshot = fixture.snapshot();
-            assertThat(snapshot.indexOf("drain:A")).isLessThan(snapshot.indexOf("terminate:D"));
+                assertThat(outcome).isInstanceOf(IllegalStateException.class);
+                assertThat(fixture.snapshot()).containsExactlyElementsOf(expectedUnwind(3, false));
+            } catch (TimeoutException hung) {
+                throw new AssertionError("the unwind of a failed start was held by a drain that overran its budget; "
+                        + "the log so far: " + fixture.snapshot(), hung);
+            } finally {
+                pool.shutdownNow();
+            }
         }
     }
 }
