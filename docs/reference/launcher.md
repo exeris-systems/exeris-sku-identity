@@ -28,12 +28,20 @@ The jar's manifest names the launcher as its main class and `lib/` as its class 
 | `migrate` | 0 | the migrations were applied, or the schema was already current |
 | `migrate` | 1 | the database refused a migration or could not be reached; the SQLSTATE is logged |
 | `migrate` | 78 | the migration settings cannot be used |
-| `serve` | 0 | the service ran and was stopped |
+| `serve` | 0 | the service ran and its stop was requested by an interrupt of the launcher's thread, which only an embedding host can do; a stop by signal never reports 0 |
+| `serve` | 143 (Linux; 128 plus the signal number) | the service ran and was stopped by SIGTERM; the JVM reports the signal, whatever the launcher returned. |
 | `serve` | 69 | the database cannot be reached; the service did not start |
+| `serve` | 70 | the kernel did not boot, for example without a licence manifest; or the service failed while starting, while serving or while stopping, or a class could not be loaded or initialised at start. One ERROR line is logged. For a kernel that did not boot it carries the kernel's message, such as the licence gate's code and reason, with the database password and any password in a connection URL withheld; for a failure of the service or of a class it names only the exception class. A fatal VM error such as running out of memory also ends with 70, at once and without running the shutdown hooks |
 | `serve` | 78 | the configuration cannot be used, or the service role is a superuser or bypasses row-level security; the service did not start |
 | either | 64 | the command line is not understood |
 
-A kernel that does not boot under `serve`, for example without a licence manifest, ends the process with an uncaught exception rather than one of these statuses. The statuses of `bootstrap-owner` are listed in its section.
+No ending of `serve` is an uncaught exception. A supervisor should treat 0 and 143 as a normal stop and every other status as a failure. The launcher exits explicitly, so a kernel thread cannot keep a finished process alive. The statuses of `bootstrap-owner` are listed in its section.
+
+### Stopping `serve`
+
+On SIGTERM the service stops answering (requests get 503), drains in-flight work for at most 15 s per capability, stops its capabilities once, and then the kernel stops its subsystems. A service that no client has kept a connection to stops in under a second.
+
+A connection that a client keeps open can hold the stop until the kernel's HTTP idle timeout (30 s by default) reclaims it. This was measured with kernel 0.13.1 on a connection that was answered 503 while the service was starting, as a load balancer's health probe is, and then served 200: the stop took about 33 s, and the same service stopped in under a second when no connection had been through the starting phase. Give the process a stop grace of at least 60 s (for example `TimeoutStopSec=60` in systemd, `--stop-timeout 60` for a container) so the supervisor does not kill it mid-drain with SIGKILL.
 
 ## `bootstrap-owner`
 
