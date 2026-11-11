@@ -21,9 +21,11 @@ import java.util.Set;
  * <ul>
  *   <li>the literal text;</li>
  *   <li>with percent-escapes decoded, position by position: any mix of literal characters and
- *       {@code %XX} escapes (upper-case or lower-case hexadecimal digits) of the secret's UTF-8 bytes, and
- *       {@code +} standing for a space wherever the secret has a space ({@code +} in the secret itself
- *       matches only {@code +} or {@code %2B});</li>
+ *       {@code %XX} escapes (upper-case or lower-case hexadecimal digits) of the secret's UTF-8 bytes. The
+ *       choice of spelling is made at each position of the secret on its own: a literal {@code +} in the
+ *       message stands for a space exactly where the secret has a space, and a {@code +} in the secret
+ *       matches a literal {@code +} or {@code %2B} (never a space), so a message may spell one space as
+ *       {@code +} and another {@code +} as itself;</li>
  *   <li>the Base64 and Base64url encodings of the secret's UTF-8 bytes, with and without padding, as a
  *       contiguous run anywhere in the message.</li>
  * </ul>
@@ -40,9 +42,11 @@ import java.util.Set;
  * an invariant, the security property is.
  *
  * <p>The work is bounded. At most {@value #MAXIMUM_SECRETS} distinct configured secrets of at least the
- * minimum length, and at most {@value #MAXIMUM_NEEDLES} needles in all (a literal, its distinct Base64 forms
- * and its two decoded views are one each), are accepted. Beyond either cap the function fails closed: it
- * returns the fixed text {@code (message withheld)}, never an unredacted message.
+ * minimum length are accepted, and a secret has at most six needles (its literal text, its distinct Base64
+ * forms and its decoded view), so no call holds more than {@value #MAXIMUM_NEEDLES}. Beyond the secret cap,
+ * or when confirming the candidates of one secret in the decoded view would cost more than a fixed multiple
+ * of the lengths of the message and the secret, the function fails closed: it returns the fixed text
+ * {@code (message withheld)}, never an unredacted message.
  *
  * <p><b>Other credentials in third-party text: best effort.</b> The structure stage below withholds what it
  * recognises by shape. It does not know the secret, so a shape it does not cover passes through. Treat it as
@@ -131,7 +135,7 @@ import java.util.Set;
  *
  * <h2>Invariants</h2>
  * <ul>
- *   <li>It never throws; when it cannot finish, or a cap is exceeded, it returns a fixed text that holds
+ *   <li>It never throws; when it cannot finish, or a bound is exceeded, it returns a fixed text that holds
  *       none of the message.</li>
  *   <li>Its time and memory are linear in the length of the message plus the length of the secrets, for the
  *       bounded number of secrets: every scan is a single left-to-right pass with no backtracking.</li>
@@ -160,8 +164,13 @@ final class LogRedaction {
     /** The most distinct configured secrets (of at least the minimum length) one call accepts. */
     static final int MAXIMUM_SECRETS = 8;
 
-    /** The most needles one call accepts, across all secrets. */
-    static final int MAXIMUM_NEEDLES = 64;
+    /**
+     * The most needles one call can search for, across all secrets: a secret has one needle for its literal
+     * text, at most four for its Base64 forms and one for its decoded view, which is six, and the bound
+     * allows eight. It follows from {@link #MAXIMUM_SECRETS}, so it is never checked and no call fails
+     * because of it.
+     */
+    static final int MAXIMUM_NEEDLES = MAXIMUM_SECRETS * 8;
 
     /** Parts of a name that make it a password name, matched in any case. */
     private static final List<String> PASSWORD_WORDS = List.of("password", "passwd", "pwd", "passphrase");
@@ -268,14 +277,9 @@ final class LogRedaction {
         if (secrets == null) {
             return eligible;
         }
-        int needles = 0;
         for (String secret : secrets) {
             if (secret != null && secret.length() >= MINIMUM_SECRET_LENGTH && eligible.add(secret)) {
                 if (eligible.size() > MAXIMUM_SECRETS) {
-                    return null;
-                }
-                needles += 3 + base64Forms(secret).size();
-                if (needles > MAXIMUM_NEEDLES) {
                     return null;
                 }
             }
@@ -303,11 +307,7 @@ final class LogRedaction {
                 markOccurrences(text, form, delta);
             }
             if (view != null) {
-                byte[] needle = secret.getBytes(StandardCharsets.UTF_8);
-                view.markOccurrences(needle, false, delta);
-                if (view.hasPlus && secret.indexOf(' ') >= 0) {
-                    view.markOccurrences(needle, true, delta);
-                }
+                view.markOccurrences(secret.getBytes(StandardCharsets.UTF_8), delta);
             }
         }
         int covered = 0;
@@ -353,12 +353,14 @@ final class LogRedaction {
      * not part of a pair contributes {@code ?}, as {@link String#getBytes} does.
      */
     private static final class DecodedView {
+        /** How many steps of confirming candidates one search may take per byte of message and secret. */
+        private static final int CONFIRMATION_FACTOR = 16;
+
         private byte[] bytes;
         private int[] from;
         private int[] to;
         private final BitSet plus = new BitSet();
         private int size;
-        private boolean hasPlus;
 
         private DecodedView(int capacity) {
             bytes = new byte[capacity];
@@ -405,39 +407,99 @@ final class LogRedaction {
             to[size] = originEnd;
             if (isPlus) {
                 plus.set(size);
-                hasPlus = true;
             }
             size++;
         }
 
-        private byte symbol(int index, boolean plusAsSpace) {
-            return plusAsSpace && plus.get(index) ? (byte) ' ' : bytes[index];
+        /**
+         * The class of a byte for the search: a space and a {@code +} are one symbol, every other byte is its
+         * own. Applied to the message and to the secret alike, it is an equivalence, so equality of classes
+         * is the relation a Knuth-Morris-Pratt search needs.
+         */
+        private static byte folded(byte value) {
+            return value == ' ' ? (byte) '+' : value;
         }
 
-        /** Like the text version, over the decoded bytes; a match is mapped back to the original range. */
-        void markOccurrences(byte[] pattern, boolean plusAsSpace, int[] delta) {
+        /**
+         * Whether the message byte at {@code index} may stand for the secret byte {@code expected}, which is a
+         * space or a {@code +}. A space in the secret is written as a space, a {@code %20}, or a literal
+         * {@code +}; a {@code +} in the secret is written as a literal {@code +} or {@code %2B}, and never as a
+         * space.
+         */
+        private boolean stands(int index, byte expected) {
+            return expected == ' ' ? bytes[index] == ' ' || plus.get(index) : bytes[index] == '+';
+        }
+
+        /**
+         * Adds +1 at the start and -1 after the end of every occurrence of {@code pattern} in the decoded
+         * message, mapped back to the original text.
+         *
+         * <p>The relation between a message byte and a secret byte is not an equivalence: a literal
+         * {@code +} in the message is compatible with a space in the secret and with a {@code +} in the
+         * secret, while a space is compatible only with a space and a {@code %2B} only with a {@code +}.
+         * The search therefore runs in two steps. The first is a Knuth-Morris-Pratt search over
+         * {@link #folded folded} symbols, in which the compatible pairs are all equal; it finds a superset
+         * of the occurrences, and being a search over an equivalence it is correct, and linear in
+         * {@code size + pattern.length}. The second confirms each candidate against the exact relation at
+         * the secret's spaces and pluses, the only positions where the two differ: every other secret byte
+         * has already been compared for equality.
+         *
+         * <p>A confirmation costs at most the number of spaces and pluses in the secret, and ends at the
+         * first position that disagrees. The cost of all confirmations is bounded by
+         * {@value #CONFIRMATION_FACTOR} times the sum of the lengths of the message and the secret; an input
+         * that would exceed it ends the call in the fixed text, so that the function stays linear and fails
+         * closed. Ordinary input does not come near it: a candidate needs the message to hold, at the secret's
+         * spaces and pluses, exactly the spaces and pluses of the secret.
+         */
+        void markOccurrences(byte[] pattern, int[] delta) {
             int m = pattern.length;
+            byte[] folded = new byte[m];
+            int separators = 0;
+            for (int i = 0; i < m; i++) {
+                folded[i] = folded(pattern[i]);
+                if (pattern[i] == ' ' || pattern[i] == '+') {
+                    separators++;
+                }
+            }
+            int[] separatorAt = new int[separators];
+            for (int i = 0, next = 0; i < m; i++) {
+                if (pattern[i] == ' ' || pattern[i] == '+') {
+                    separatorAt[next++] = i;
+                }
+            }
             int[] fallback = new int[m];
             for (int i = 1, k = 0; i < m; i++) {
-                while (k > 0 && pattern[i] != pattern[k]) {
+                while (k > 0 && folded[i] != folded[k]) {
                     k = fallback[k - 1];
                 }
-                if (pattern[i] == pattern[k]) {
+                if (folded[i] == folded[k]) {
                     k++;
                 }
                 fallback[i] = k;
             }
+            long budget = CONFIRMATION_FACTOR * ((long) size + m);
             for (int i = 0, k = 0; i < size; i++) {
-                byte symbol = symbol(i, plusAsSpace);
-                while (k > 0 && symbol != pattern[k]) {
+                byte symbol = folded(bytes[i]);
+                while (k > 0 && symbol != folded[k]) {
                     k = fallback[k - 1];
                 }
-                if (symbol == pattern[k]) {
+                if (symbol == folded[k]) {
                     k++;
                 }
                 if (k == m) {
-                    delta[from[i - m + 1]]++;
-                    delta[to[i]]--;
+                    int start = i - m + 1;
+                    boolean exact = true;
+                    for (int j = 0; j < separators && exact; j++) {
+                        budget--;
+                        exact = stands(start + separatorAt[j], pattern[separatorAt[j]]);
+                    }
+                    if (budget < 0) {
+                        throw new ConfirmationBudgetExceeded();
+                    }
+                    if (exact) {
+                        delta[from[start]]++;
+                        delta[to[i]]--;
+                    }
                     k = fallback[k - 1];
                 }
             }
@@ -454,6 +516,15 @@ final class LogRedaction {
                 return c - 'A' + 10;
             }
             return -1;
+        }
+    }
+
+    /** The search for a secret would cost more than its bound; the call ends in the fixed text. */
+    private static final class ConfirmationBudgetExceeded extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        ConfirmationBudgetExceeded() {
+            super(null, null, false, false);
         }
     }
 

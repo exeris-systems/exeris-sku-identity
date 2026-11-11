@@ -58,10 +58,10 @@ A message that the kernel or a driver produced is passed through a redaction bef
 | Form | Matched |
 | --- | --- |
 | literal | the text as configured, case-sensitive: a differently cased string is another string |
-| percent-encoded | any mix of literal characters and `%XX` escapes of the secret's UTF-8 bytes, upper-case or lower-case hexadecimal, and `+` for a space where the secret has a space |
+| percent-encoded | any mix of literal characters and `%XX` escapes of the secret's UTF-8 bytes, upper-case or lower-case hexadecimal. The spelling is chosen at each position of the secret on its own: a literal `+` in the message stands for a space only where the secret has a space, and a `+` of the secret matches a literal `+` or `%2B`, so a secret `a b+c` is withheld in `a+b+c`, `a+b%2Bc` and `a%20b+c` |
 | Base64, Base64url | the encoding of the secret's UTF-8 bytes, with and without padding, as a contiguous run |
 
-A secret shorter than 3 characters is withheld only where the structure rules below name it. At most 8 distinct secrets and 64 match patterns are accepted; beyond that the launcher logs `(message withheld)` instead of the message. Not recognised: a secret split by a line break, encoded twice, or inside a longer Base64 payload.
+A secret shorter than 3 characters is withheld only where the structure rules below name it. At most 8 distinct secrets are accepted, and a secret has at most six match patterns (its literal text, up to four Base64 forms, and its percent-decoded view), so there is no separate limit on patterns. Beyond 8 secrets, or when a message is built so that checking the percent-decoded view of one secret would take more than 16 steps per byte of message and secret, the launcher logs `(message withheld)` instead of the message. Not recognised: a secret split by a line break, encoded twice, or inside a longer Base64 payload.
 
 **Other credentials in third-party messages: best effort.** The launcher also withholds credentials it recognises by shape, without knowing them. A shape that is not in the table passes through.
 
@@ -76,6 +76,8 @@ A secret shorter than 3 characters is withheld only where the structure rules be
 | `Authorization:` and `Proxy-Authorization:` lines | everything after the scheme, to the end of the line |
 | `Cookie:` and `Set-Cookie:` lines | everything after the colon, to the end of the line |
 | `--<sensitive name> <word>` | the next word |
+
+**Cost to readability.** An unquoted value of a password name outside a URL query withholds the rest of its line, because nothing in the text says where a password that may hold blanks, commas and `&` ends. A driver message that dumps its properties, such as `{user=u, password=x, ssl=true}`, therefore loses everything that follows the password (`, ssl=true}`). A URL keeps its host, port, database and parameters, because its password ends at the `@` of the authority or at the next `&`, `;` or white space of a query.
 
 A name is a run of letters, digits, `_`, `.` and `-`. A *password name* contains `password`, `passwd`, `pwd` or `passphrase`, in any case. A *sensitive name* is a password name, or contains `secret`, `token` or `credential`, or ends in a key word: its last component (split at `_`, `.`, `-` and case changes) is `key`, or `api`, `ssl`, `tls`, `private`, `access`, `secret`, `auth`, `encryption`, `signing`, `master`, `hmac`, `pass`, `session`, `client`, `license`, `aes`, `rsa` or `jwt` followed by `key`. `monkey`, `keystore` and `key_id` are not sensitive. `Name.java:42` is a stack-trace position, never a label. The `=` form of `authorization` and `cookie`, the short flag `-p<value>`, and a secret in free text (`password is hunter2`) are not covered.
 
