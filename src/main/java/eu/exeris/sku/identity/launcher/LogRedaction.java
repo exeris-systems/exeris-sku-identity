@@ -43,7 +43,7 @@ import java.util.Set;
  *
  * <p>The work is bounded. At most {@value #MAXIMUM_SECRETS} distinct configured secrets of at least the
  * minimum length are accepted, and a secret has at most six needles (its literal text, its distinct Base64
- * forms and its decoded view), so no call holds more than {@value #MAXIMUM_NEEDLES}. Beyond the secret cap,
+ * forms and its decoded view). Beyond the secret cap,
  * or when confirming the candidates of one secret in the decoded view would cost more than a fixed multiple
  * of the lengths of the message and the secret, the function fails closed: it returns the fixed text
  * {@code (message withheld)}, never an unredacted message.
@@ -163,14 +163,6 @@ final class LogRedaction {
 
     /** The most distinct configured secrets (of at least the minimum length) one call accepts. */
     static final int MAXIMUM_SECRETS = 8;
-
-    /**
-     * The most needles one call can search for, across all secrets: a secret has one needle for its literal
-     * text, at most four for its Base64 forms and one for its decoded view, which is six, and the bound
-     * allows eight. It follows from {@link #MAXIMUM_SECRETS}, so it is never checked and no call fails
-     * because of it.
-     */
-    static final int MAXIMUM_NEEDLES = MAXIMUM_SECRETS * 8;
 
     /** Parts of a name that make it a password name, matched in any case. */
     private static final List<String> PASSWORD_WORDS = List.of("password", "passwd", "pwd", "passphrase");
