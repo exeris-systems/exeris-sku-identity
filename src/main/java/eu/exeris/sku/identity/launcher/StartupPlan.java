@@ -144,20 +144,35 @@ record StartupPlan(IdentityConfig config, DatabaseSettings database, int maxPool
      */
     Map<String, String> kernelProperties() {
         IdentityConfig.Http http = config.http();
-        Map<String, String> properties = new LinkedHashMap<>();
-        properties.put("exeris.environment", environment.id());
-        properties.put("exeris.persistence.rlsEnabled", "true");
+        Map<String, String> properties = persistenceProperties();
         properties.put("exeris.http.mode", "SERVER");
         properties.put("exeris.http.bindHost", http.bindHost());
         properties.put("exeris.http.port", String.valueOf(http.port()));
         properties.put("exeris.http.maxRequestBodyBytes", String.valueOf(http.maxRequestBodyBytes()));
         properties.put("exeris.http.maxRequestHeaderCount", String.valueOf(http.maxRequestHeaderCount()));
         properties.put("exeris.http.maxRequestHeaderSize", String.valueOf(http.maxRequestHeaderSize()));
+        return properties;
+    }
+
+    /**
+     * The kernel settings a process needs when it uses the database and binds no listener: the declared
+     * environment, row-level security and the service role's connection pool. {@link #kernelProperties()}
+     * adds the listener's to these.
+     */
+    Map<String, String> persistenceProperties() {
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("exeris.environment", environment.id());
+        properties.put("exeris.persistence.rlsEnabled", "true");
         properties.put("exeris.persistence.jdbcUrl", database.url());
         properties.put("exeris.persistence.username", database.user());
         properties.put("exeris.persistence.password", database.password());
         properties.put("exeris.persistence.maxPoolSize", String.valueOf(maxPoolSize));
         return properties;
+    }
+
+    /** Whether the host named a membership directory, rather than the stand-in used when none is named. */
+    boolean hasMembershipDirectory() {
+        return !(membershipDirectory instanceof UnconfiguredMembershipDirectory);
     }
 
     /** The declared environment; a missing or unknown one is a problem, never a default. */
