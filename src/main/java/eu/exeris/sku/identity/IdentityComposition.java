@@ -75,8 +75,12 @@ public final class IdentityComposition {
     /** The public key-set route the token issuer registers once it is ready. */
     static final String JWKS_ROUTE = "GET /.well-known/jwks.json";
 
-    /** The time each capability may take to drain when a start fails; nothing has been served by then. */
-    private static final Duration START_FAILURE_DRAIN = Duration.ofSeconds(5);
+    /**
+     * The one budget shared by all the drains of the unwind of a failed start; nothing has been served by
+     * then. Each capability is given what is left of it.
+     */
+    private static final long START_FAILURE_DRAIN_SECONDS = 5;
+    private static final Duration START_FAILURE_DRAIN = Duration.ofSeconds(START_FAILURE_DRAIN_SECONDS);
 
     private final ServiceBoundaryCoreModule serviceBoundary;
     private final List<CapabilityLifecycleHooks> readyOrder;
@@ -131,6 +135,10 @@ public final class IdentityComposition {
      * {@code CapabilityLifecycleHooks#terminate()} is owed to every capability that entered
      * {@code initialize}, whether or not it completed, and a half-initialised capability is the one most
      * likely to hold something to release. A capability that was never reached is not terminated.
+     *
+     * <p>The drains of the unwind share one budget of {@value #START_FAILURE_DRAIN_SECONDS} seconds, with the
+     * semantics of {@link #stop(Duration)}: a drain that overruns it is interrupted and abandoned, and the
+     * terminations always follow.
      *
      * <p>The unwind follows the capability lifecycle contract. When {@code initialize} fails at capability
      * <i>k</i>, the capabilities that completed it are drained in reverse order, <i>k</i> is not drained
@@ -228,7 +236,18 @@ public final class IdentityComposition {
      * capability has been terminated, the first one with the later ones suppressed, so that a capability whose
      * class cannot be loaded does not leave the ones after it holding their resources.
      *
-     * @param drainTimeout how long each capability may take to drain in-flight work
+     * <p>The drains share one budget, {@code drainTimeout}: each capability is passed what remains of it, and
+     * a drain that is still running when it is used up is interrupted and abandoned (logged once at
+     * {@code WARNING}), after which the next capability is drained, or skipped if nothing remains, and every
+     * capability is terminated. A drain runs on the thread that called {@code stop}, which holds this
+     * object's monitor: a drain that calls back into this composition re-enters the monitor and cannot
+     * deadlock against its own stop. A concurrent second {@code stop} waits for the monitor, and so for the
+     * first stop to complete, and then finds the composition stopped and does nothing; the wait is bounded by
+     * the budget plus the time the terminations take, provided the drains honour an interrupt. The drain is
+     * interrupted, not killed: a drain that ignores the interrupt keeps the stop until it returns, and is
+     * never running when its capability's {@code terminate} is called.
+     *
+     * @param drainTimeout the time all the capabilities together may take to drain in-flight work
      * @throws Error the first {@code Error} a drain or a terminate threw, after all have been attempted
      */
     public synchronized void stop(Duration drainTimeout) {
@@ -253,16 +272,36 @@ public final class IdentityComposition {
 
     /**
      * Drains the first {@code count} capabilities in reverse order, every one of them whatever an earlier
-     * one threw.
+     * one threw, within one budget: a capability is passed what remains of {@code budget}, a drain still
+     * running when the budget is used up is interrupted and abandoned, and once nothing remains the later
+     * drains are skipped. Each abandoned or skipped drain is logged once at {@code WARNING} by the class of
+     * the capability.
+     *
+     * <p>A drain runs on the calling thread, which keeps the bindings the thread carries, and a watchdog
+     * interrupts that thread at the deadline. The interrupt flag the thread had on entry is what it has on
+     * return: an interrupt the watchdog delivered is cleared and never reaches the next drain or any
+     * terminate.
      *
      * @return the first {@link Error} a drain threw, with the later ones suppressed; {@code null} when
      *         there was none. An {@link Exception} is logged and goes no further.
      */
-    private Error drainFirst(int count, Duration drainTimeout) {
+    private Error drainFirst(int count, Duration budget) {
         Error failure = null;
+        long deadline = System.nanoTime() + nanos(budget);
         for (int i = count - 1; i >= 0; i--) {
+            CapabilityLifecycleHooks module = readyOrder.get(i);
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
+                        "the drain budget is used up, not draining {0}", module.getClass().getName());
+                continue;
+            }
             try {
-                readyOrder.get(i).drain(drainTimeout);
+                if (!drainWithin(module, Duration.ofNanos(remaining))) {
+                    System.getLogger(IdentityComposition.class.getName()).log(System.Logger.Level.WARNING,
+                            "{0} overran the drain budget, its drain was interrupted and abandoned",
+                            module.getClass().getName());
+                }
             } catch (Exception e) {
                 System.getLogger(IdentityComposition.class.getName())
                         .log(System.Logger.Level.WARNING, "draining a capability failed", e);
@@ -271,6 +310,65 @@ public final class IdentityComposition {
             }
         }
         return failure;
+    }
+
+    /**
+     * Runs one drain on the calling thread with a watchdog that interrupts the thread when {@code remaining}
+     * has passed.
+     *
+     * @return {@code false} when the watchdog interrupted the drain; {@code true} otherwise
+     * @throws Exception what the drain threw, unless it was the {@link InterruptedException} of the watchdog
+     */
+    private static boolean drainWithin(CapabilityLifecycleHooks module, Duration remaining) throws Exception {
+        Thread caller = Thread.currentThread();
+        boolean flagOnEntry = caller.isInterrupted();
+        Object gate = new Object();
+        boolean[] over = {false};
+        boolean[] fired = {false};
+        Thread watchdog = new Thread(() -> {
+            try {
+                Thread.sleep(remaining);
+            } catch (InterruptedException cancelled) {
+                return;
+            }
+            synchronized (gate) {
+                if (!over[0]) {
+                    fired[0] = true;
+                    caller.interrupt();
+                }
+            }
+        }, "identity-drain-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+        try {
+            module.drain(remaining);
+        } catch (InterruptedException interrupted) {
+            synchronized (gate) {
+                if (!fired[0]) {
+                    throw interrupted;
+                }
+            }
+        } finally {
+            synchronized (gate) {
+                over[0] = true;
+            }
+            watchdog.interrupt();
+            if (fired[0]) {
+                Thread.interrupted();
+                if (flagOnEntry) {
+                    caller.interrupt();
+                }
+            }
+        }
+        return !fired[0];
+    }
+
+    private static long nanos(Duration budget) {
+        try {
+            return Math.max(0, budget.toNanos());
+        } catch (ArithmeticException tooLong) {
+            return Long.MAX_VALUE / 4;
+        }
     }
 
     /**

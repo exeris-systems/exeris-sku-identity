@@ -39,7 +39,7 @@ No ending of `serve` is an uncaught exception. A supervisor should treat 0 and 1
 
 ### Stopping `serve`
 
-On SIGTERM the service stops answering (requests get 503), drains in-flight work for at most 15 s per capability, stops its capabilities once, and then the kernel stops its subsystems. A service that no client has kept a connection to stops in under a second.
+On SIGTERM the service stops answering (requests get 503), drains in-flight work within one budget of 15 s shared by all the capabilities (a drain that overruns it is interrupted and abandoned, and the later capabilities are still stopped), stops its capabilities once, and then the kernel stops its subsystems. A service that no client has kept a connection to stops in under a second.
 
 The stop notice, `Shutdown signal received, draining`, is written once to the standard error by the shutdown hook itself, not through the logging framework: the framework's own shutdown hook runs at the same time and removes its handlers, so a record logged from a hook can be lost. A stop requested while a host part is still joining the transactions, before the composition has started, starts nothing and never logs `Exeris Identity running on`.
 
