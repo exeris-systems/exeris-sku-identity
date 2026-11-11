@@ -20,7 +20,7 @@ record BootstrapOwnerSettings(String email, Path passwordFile, UUID tenantId) {
     static final String EMAIL = "EXERIS_IDENTITY_BOOTSTRAP_OWNER_EMAIL";
     static final String PASSWORD_FILE = "EXERIS_IDENTITY_BOOTSTRAP_OWNER_PASSWORD_FILE";
     static final String TENANT = "EXERIS_IDENTITY_BOOTSTRAP_OWNER_TENANT";
-    /** Never accepted: its presence is refused so that a password is not left in the environment. */
+    /** Never accepted: any non-empty value is refused so that a password is not left in the environment. */
     static final String INLINE_PASSWORD = "EXERIS_IDENTITY_BOOTSTRAP_OWNER_PASSWORD";
 
     private static final int MAX_ADDRESS_LENGTH = 320;

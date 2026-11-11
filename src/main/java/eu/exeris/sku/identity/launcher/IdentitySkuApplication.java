@@ -28,8 +28,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * database role and exits. {@code bootstrap-owner} creates the first verified account on a migrated database
  * that has none, without starting the HTTP service, and exits.
  *
- * <p>This is the only class that names a kernel driver: the Argon2id password encoder. The library surface
- * takes a {@code KernelPasswordEncoder} from its host.
+ * <p>Only this package names a kernel driver, the Argon2id password encoder: this class for {@code serve}
+ * and {@link BootstrapOwnerCommand} for {@code bootstrap-owner}. The library surface takes a
+ * {@code KernelPasswordEncoder} from its host.
  *
  * <p>TLS is not provided: the listener is plaintext and expects TLS to be terminated in front of it.
  */

@@ -34,7 +34,7 @@ final class LauncherEnvironment {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /** Whether the variable has any value at all, blank included. */
+    /** Whether the variable holds at least one character, whitespace included; an empty value counts as unset. */
     boolean isSet(String key) {
         String value = env.get(key);
         return value != null && !value.isEmpty();
