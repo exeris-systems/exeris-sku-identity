@@ -828,13 +828,13 @@ class IdentityCompositionDrainBudgetTest {
     }
 
     /**
-     * The launcher reference says a drain that overruns is "interrupted and abandoned" and that the later
-     * capabilities are still stopped, and does not say that a drain which ignores the interrupt holds the
-     * stop and the process with it.
+     * The caller's interrupt flag survives a drain that consumed it, a negative timeout of any size is an
+     * exhausted budget, and the launcher reference states that a drain which ignores the interrupt holds
+     * the stop and the process with it.
      */
     @org.junit.jupiter.api.Nested
     @DisplayName("Flag, timeout bounds and the reference text")
-    class KnownDefects {
+    class FlagAndBounds {
 
         @Test
         @DisplayName("The flag a caller entered with is still set after a drain consumed it by throwing InterruptedException, and the next drain sees it too")
