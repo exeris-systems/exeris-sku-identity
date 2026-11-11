@@ -21,6 +21,20 @@ The jar's manifest names the launcher as its main class and `lib/` as its class 
 - **`bootstrap-owner`** boots the kernel's persistence and scheduling, and so needs the licence manifest (`EXERIS_LICENSE_MANIFEST_PATH`).
 - **`serve`** boots the kernel and needs the licence manifest.
 
+### Exit statuses of `migrate` and `serve`
+
+| Command | Status | Meaning |
+| --- | --- | --- |
+| `migrate` | 0 | the migrations were applied, or the schema was already current |
+| `migrate` | 1 | the database refused a migration or could not be reached; the SQLSTATE is logged |
+| `migrate` | 78 | the migration settings cannot be used |
+| `serve` | 0 | the service ran and was stopped |
+| `serve` | 69 | the database cannot be reached; the service did not start |
+| `serve` | 78 | the configuration cannot be used, or the service role is a superuser or bypasses row-level security; the service did not start |
+| either | 64 | the command line is not understood |
+
+A kernel that does not boot under `serve`, for example without a licence manifest, ends the process with an uncaught exception rather than one of these statuses. The statuses of `bootstrap-owner` are listed in its section.
+
 ## `bootstrap-owner`
 
 A fresh installation has no account, no self sign-up and no administrative route, so nobody could sign in or hold `invitations:write`. `bootstrap-owner` creates the first account: verified, able to sign in at once, through the credential store's `CredentialProvisioning.provisionFirstVerified`, which creates the account only if the deployment holds none and decides that atomically, so two runs started together create exactly one. It runs once against a migrated database, never starts the HTTP service and exits.
