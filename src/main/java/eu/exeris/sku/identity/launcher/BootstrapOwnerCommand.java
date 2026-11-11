@@ -111,11 +111,29 @@ final class BootstrapOwnerCommand {
         if (result.failure != null) {
             return failed(result.failure);
         }
-        if (result.outcome instanceof OwnerProvisioning.Provisioned created) {
-            report(created);
-            return 0;
-        }
-        return accountsExist();
+        return exitStatus(result.outcome);
+    }
+
+    /**
+     * Maps an outcome to the process exit status. An outcome that was never produced is never reported as a
+     * refusal or as success: it is the not-completed status, and the switch is exhaustive over the sealed
+     * outcome type so that a new outcome cannot fall through to another status.
+     *
+     * @param outcome what the provisioning ended with; {@code null} when it never ran
+     * @return the process exit status
+     */
+    static int exitStatus(OwnerProvisioning.Outcome outcome) {
+        return switch (outcome) {
+            case null -> {
+                LOG.log(System.Logger.Level.ERROR, "The provisioning did not run and nothing changed.");
+                yield IdentitySkuApplication.EXIT_NOT_COMPLETED;
+            }
+            case OwnerProvisioning.Provisioned created -> {
+                report(created);
+                yield 0;
+            }
+            case OwnerProvisioning.AccountsExist exists -> accountsExist();
+        };
     }
 
     private static OwnerProvisioning.Outcome compose(StartupPlan plan, BootstrapOwnerSettings settings,

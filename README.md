@@ -84,7 +84,7 @@ It needs everything `serve` needs (the identity configuration, `EXERIS_ENVIRONME
 | 64 | the command line was not understood |
 | 65 | the schema is not migrated for the service role (found after the kernel booted) |
 | 69 | the database cannot be reached |
-| 70 | the kernel did not boot or the transaction failed; nothing was committed |
+| 70 | the kernel did not boot, the provisioning did not run or the transaction failed; nothing was committed |
 | 73 | an account already exists; nothing was changed (found after the kernel booted) |
 | 78 | the configuration cannot be used, or the credential table is under row-level security, which the command refuses because the first account is decided for the whole deployment |
 
