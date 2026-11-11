@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -31,8 +32,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Every ending of {@code serve} has one exit status and none ends in an uncaught exception: a
  * configuration that cannot be used is {@value #EXIT_CONFIG}, a database that cannot be reached is
  * {@value #EXIT_UNAVAILABLE}, a kernel that did not boot or a service that failed is
- * {@value #EXIT_NOT_COMPLETED}, and a stop on request is 0. The service is stopped before the kernel
- * stops its subsystems, on every path.
+ * {@value #EXIT_NOT_COMPLETED}, and a stop on request is 0. An {@code Error} raised while starting, such as
+ * a class that cannot be loaded, is the not-completed status; a fatal VM error ends the process with that
+ * status without running its hooks. The service is stopped before the kernel stops its subsystems, on every
+ * path that returns, and exactly once.
+ *
+ * <p>A process ended by a termination signal reports the signal's status (143 for SIGTERM on Linux), not 0.
  *
  * <p>Only this package names a kernel driver, the Argon2id password encoder: this class for {@code serve}
  * and {@link BootstrapOwnerCommand} for {@code bootstrap-owner}. The library surface takes a
@@ -81,10 +86,34 @@ public final class IdentitySkuApplication {
             System.exit(bootstrapOwner(System.getenv()));
             return;
         }
-        int status = command.equals("migrate") ? migrate(System.getenv()) : serve(System.getenv());
-        if (status != 0) {
-            System.exit(status);
+        int status;
+        try {
+            status = command.equals("migrate") ? migrate(System.getenv()) : serve(System.getenv());
+        } catch (VirtualMachineError fatal) {
+            haltAfter(fatal);
+            return;
         }
+        // Exits unconditionally, as bootstrap-owner does: the kernel's transport threads are not daemons, so
+        // a main that merely returned would leave the process alive if any of them outlived the kernel's
+        // stop. When a termination signal started the shutdown, exit waits for it and the signal's own
+        // status (128 + signal) is the one the process reports. No shutdown hook waits for this thread.
+        System.exit(status);
+    }
+
+    /**
+     * The process cannot be trusted to run more code once the VM reports it is out of memory, a stack or
+     * another resource. Nothing is handled and no hook is run, because a hook may need the memory that is
+     * gone; the process ends at once with the not-completed status. Whatever was started has been unwound
+     * on the way here, and the operating system closes what remains. Only an error that reaches the main
+     * thread is covered: one raised on another thread leaves that thread's own handler in charge.
+     */
+    private static void haltAfter(VirtualMachineError fatal) {
+        try {
+            System.err.println("Identity ended on a fatal VM error (" + fatal.getClass().getName() + ")");
+        } catch (Throwable ignored) { // NOPMD - nothing more can be done about a failed report
+            // the status below is the report
+        }
+        Runtime.getRuntime().halt(EXIT_NOT_COMPLETED);
     }
 
     /** Applies the schema; returns the process exit status. */
@@ -115,6 +144,19 @@ public final class IdentitySkuApplication {
      * kernel did not boot or the service failed at any point.
      */
     static int serve(Map<String, String> environment) {
+        try {
+            return serveChecked(environment);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (RuntimeException | Error unexpected) {
+            // A class that cannot be loaded or initialised, or any failure no step above expected, is a
+            // start that did not complete. Only its class is printed: its message is not ours to print.
+            LOG.log(System.Logger.Level.ERROR, "Identity could not start ({0})", unexpected.getClass().getName());
+            return EXIT_NOT_COMPLETED;
+        }
+    }
+
+    private static int serveChecked(Map<String, String> environment) {
         StartupPlan plan;
         try {
             plan = StartupPlan.prepare(environment);
@@ -170,7 +212,73 @@ public final class IdentitySkuApplication {
     /** What the kernel's callback ended with; read after the boot returns, on the same thread. */
     private static final class Outcome {
         private boolean serving;
-        private Exception failure;
+        private Throwable failure;
+    }
+
+    /**
+     * The one place the service is stopped. Whichever of the callback's own thread and the shutdown hook
+     * asks first performs the stop; the other waits until it is done. The state moves once, from running to
+     * stopping, by a compare-and-set, so the handler is withdrawn and the composition drained exactly once.
+     *
+     * <p>No thread waits for another that waits for it. The performing thread waits only for the
+     * composition's own drain, which depends on neither of them; the waiting thread holds no lock the
+     * performer needs. A stop that precedes the start leaves the composition unstarted: {@link #admit}
+     * refuses it, and a stop that follows the admission is ordered after {@code start()} by the
+     * composition's own monitor.
+     */
+    private static final class ServiceStop {
+        private final SwitchableHandler handler;
+        private final AtomicReference<IdentityComposition> composition = new AtomicReference<>();
+        private final AtomicBoolean stopping = new AtomicBoolean();
+        private final CountDownLatch stopped = new CountDownLatch(1);
+        private volatile Throwable failure;
+
+        ServiceStop(SwitchableHandler handler) {
+            this.handler = handler;
+        }
+
+        /** Publishes the composition; false when a stop has already begun and it must not be started. */
+        boolean admit(IdentityComposition built) {
+            composition.set(built);
+            return !stopping.get();
+        }
+
+        /** Stops the service, or waits for the thread that is stopping it; the failure of the stop, if any. */
+        Throwable stop() {
+            if (stopping.compareAndSet(false, true)) {
+                try {
+                    handler.withdraw();
+                    IdentityComposition running = composition.get();
+                    if (running != null) {
+                        running.stop(DRAIN);
+                    }
+                } catch (VirtualMachineError fatal) {
+                    throw fatal;
+                } catch (RuntimeException | Error e) {
+                    failure = e;
+                } finally {
+                    stopped.countDown();
+                }
+            } else {
+                awaitStopped();
+            }
+            return failure;
+        }
+
+        private void awaitStopped() {
+            boolean interrupted = false;
+            while (true) {
+                try {
+                    stopped.await();
+                    break;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private static Ending run(StartupPlan plan) {
@@ -178,32 +286,38 @@ public final class IdentitySkuApplication {
 
         SwitchableHandler handler = new SwitchableHandler();
         CountDownLatch shutdown = new CountDownLatch(1);
-        AtomicReference<IdentityComposition> composition = new AtomicReference<>();
+        ServiceStop stop = new ServiceStop(handler);
         Outcome outcome = new Outcome();
 
-        // The hook never waits for the thread that exits the process: it withdraws the handler, stops the
-        // composition and releases the latch, which is all the main thread is waiting for.
+        // The hook never waits for the thread that exits the process: it stops the service, which it waits
+        // for only when the callback's thread is already stopping it, and releases the latch, which is all
+        // the callback is waiting for.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.log(System.Logger.Level.INFO, "Shutdown signal received, draining");
-            handler.withdraw();
-            IdentityComposition running = composition.get();
-            if (running != null) {
-                running.stop(DRAIN);
-            }
+            stop.stop();
             shutdown.countDown();
         }, "identity-shutdown"));
 
         LOG.log(System.Logger.Level.INFO, "Booting Exeris Kernel subsystems");
         try {
             ScopedValue.where(HttpKernelProviders.HTTP_SERVER_HANDLER, handler).call(() -> {
-                boot(plan, handler, composition, shutdown, outcome);
+                boot(plan, handler, stop, shutdown, outcome);
                 return null;
             });
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
         } catch (Exception e) {
             // Only the kernel can end the callback this way: it records its own failures in the outcome.
             // The licence refusal is a runtime exception, not a BootstrapException. The kernel's message
-            // names the gate's code and text; it carries no configuration secret.
-            LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was started: {0}", e.getMessage());
+            // names the gate's code and text; a driver's message may quote the connection URL, so the
+            // credentials in it are withheld.
+            LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was started: {0}",
+                    LogRedaction.of(e.getMessage(), plan.database().password()));
+            return Ending.KERNEL_NOT_BOOTED;
+        } catch (Error e) {
+            // A class that cannot be loaded or initialised at start is a start that did not complete.
+            LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was started ({0})",
+                    e.getClass().getName());
             return Ending.KERNEL_NOT_BOOTED;
         } finally {
             System.clearProperty("exeris.persistence.password");
@@ -220,12 +334,11 @@ public final class IdentitySkuApplication {
     }
 
     /**
-     * Runs on the thread that called {@code serve}, inside the kernel's callback. Nothing leaves it: the
-     * ending is recorded in {@code outcome}, and the composition is stopped before the callback returns so
-     * that the kernel stops its subsystems only after the service has drained.
+     * Runs on the thread that called {@code serve}, inside the kernel's callback. Nothing but a fatal VM
+     * error leaves it: the ending is recorded in {@code outcome}, and the service is stopped before the
+     * callback returns so that the kernel stops its subsystems only after the service has drained.
      */
-    private static void boot(StartupPlan plan, SwitchableHandler handler,
-                             AtomicReference<IdentityComposition> composition,
+    private static void boot(StartupPlan plan, SwitchableHandler handler, ServiceStop stop,
                              CountDownLatch shutdown, Outcome outcome) throws KernelBootstrap.BootstrapException {
         KernelBootstrap.builder()
                 .selector(BootstrapSelector.forNames(SUBSYSTEMS.toArray(String[]::new)))
@@ -246,41 +359,35 @@ public final class IdentitySkuApplication {
                             builder.invitationDelivery(plan.invitationDelivery());
                         }
                         IdentityComposition built = builder.build();
-                        composition.set(built);
-                        // Host parts are created before the kernel boots; they get the executor now,
-                        // before start() runs any job and before handler.serve() lets any request in.
-                        plan.joinTransactions(built.transactionalExecutor());
-                        built.start();
-                        handler.serve(built.httpHandler());
-                        outcome.serving = true;
-                        LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",
-                                plan.config().http().bindHost(), plan.config().http().port());
-                        shutdown.await();
+                        if (stop.admit(built)) {
+                            // Host parts are created before the kernel boots; they get the executor now,
+                            // before start() runs any job and before handler.serve() lets any request in.
+                            plan.joinTransactions(built.transactionalExecutor());
+                            built.start();
+                            handler.serve(built.httpHandler());
+                            outcome.serving = true;
+                            LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",
+                                    plan.config().http().bindHost(), plan.config().http().port());
+                            shutdown.await();
+                        }
                     } catch (InterruptedException e) {
                         // An interrupt asks the service to stop; it is not a failure.
                         Thread.currentThread().interrupt();
-                    } catch (Exception e) {
+                    } catch (VirtualMachineError fatal) {
+                        throw fatal;
+                    } catch (Exception | Error e) {
                         outcome.failure = e;
                     } finally {
-                        release(handler, composition.get(), outcome);
+                        Throwable stopFailure = stop.stop();
+                        if (stopFailure != null) {
+                            LOG.log(System.Logger.Level.ERROR, "Stopping Identity failed ({0})",
+                                    stopFailure.getClass().getName());
+                            if (outcome.failure == null) {
+                                outcome.failure = stopFailure;
+                            }
+                        }
                     }
                 });
-    }
-
-    /** Withdraws the handler and stops the composition; idempotent with the shutdown hook's own stop. */
-    private static void release(SwitchableHandler handler, IdentityComposition running, Outcome outcome) {
-        handler.withdraw();
-        if (running == null) {
-            return;
-        }
-        try {
-            running.stop(DRAIN);
-        } catch (RuntimeException e) {
-            LOG.log(System.Logger.Level.ERROR, "Stopping Identity failed ({0})", e.getClass().getName());
-            if (outcome.failure == null) {
-                outcome.failure = e;
-            }
-        }
     }
 
     private static JobScheduler scheduler() {

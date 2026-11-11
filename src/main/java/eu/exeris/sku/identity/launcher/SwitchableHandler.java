@@ -15,12 +15,18 @@ import java.util.concurrent.atomic.AtomicReference;
 final class SwitchableHandler implements HttpHandler {
 
     private final AtomicReference<HttpHandler> target = new AtomicReference<>();
+    private boolean withdrawn;
 
-    void serve(HttpHandler handler) {
-        target.set(handler);
+    /** Starts answering with the handler, unless it was withdrawn: a withdrawal is final. */
+    synchronized void serve(HttpHandler handler) {
+        if (!withdrawn) {
+            target.set(handler);
+        }
     }
 
-    void withdraw() {
+    /** Stops answering for good; a later {@link #serve} has no effect. Idempotent. */
+    synchronized void withdraw() {
+        withdrawn = true;
         target.set(null);
     }
 
