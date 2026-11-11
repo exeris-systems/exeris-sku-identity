@@ -16,8 +16,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Runnable entry point of the Exeris Identity SKU.
@@ -149,8 +147,6 @@ public final class IdentitySkuApplication {
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (RuntimeException | Error unexpected) {
-            // A class that cannot be loaded or initialised, or any failure no step above expected, is a
-            // start that did not complete. Only its class is printed: its message is not ours to print.
             LOG.log(System.Logger.Level.ERROR, "Identity could not start ({0})", unexpected.getClass().getName());
             return EXIT_NOT_COMPLETED;
         }
@@ -215,78 +211,12 @@ public final class IdentitySkuApplication {
         private Throwable failure;
     }
 
-    /**
-     * The one place the service is stopped. Whichever of the callback's own thread and the shutdown hook
-     * asks first performs the stop; the other waits until it is done. The state moves once, from running to
-     * stopping, by a compare-and-set, so the handler is withdrawn and the composition drained exactly once.
-     *
-     * <p>No thread waits for another that waits for it. The performing thread waits only for the
-     * composition's own drain, which depends on neither of them; the waiting thread holds no lock the
-     * performer needs. A stop that precedes the start leaves the composition unstarted: {@link #admit}
-     * refuses it, and a stop that follows the admission is ordered after {@code start()} by the
-     * composition's own monitor.
-     */
-    private static final class ServiceStop {
-        private final SwitchableHandler handler;
-        private final AtomicReference<IdentityComposition> composition = new AtomicReference<>();
-        private final AtomicBoolean stopping = new AtomicBoolean();
-        private final CountDownLatch stopped = new CountDownLatch(1);
-        private volatile Throwable failure;
-
-        ServiceStop(SwitchableHandler handler) {
-            this.handler = handler;
-        }
-
-        /** Publishes the composition; false when a stop has already begun and it must not be started. */
-        boolean admit(IdentityComposition built) {
-            composition.set(built);
-            return !stopping.get();
-        }
-
-        /** Stops the service, or waits for the thread that is stopping it; the failure of the stop, if any. */
-        Throwable stop() {
-            if (stopping.compareAndSet(false, true)) {
-                try {
-                    handler.withdraw();
-                    IdentityComposition running = composition.get();
-                    if (running != null) {
-                        running.stop(DRAIN);
-                    }
-                } catch (VirtualMachineError fatal) {
-                    throw fatal;
-                } catch (RuntimeException | Error e) {
-                    failure = e;
-                } finally {
-                    stopped.countDown();
-                }
-            } else {
-                awaitStopped();
-            }
-            return failure;
-        }
-
-        private void awaitStopped() {
-            boolean interrupted = false;
-            while (true) {
-                try {
-                    stopped.await();
-                    break;
-                } catch (InterruptedException e) {
-                    interrupted = true;
-                }
-            }
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
     private static Ending run(StartupPlan plan) {
         plan.kernelProperties().forEach(System::setProperty);
 
         SwitchableHandler handler = new SwitchableHandler();
         CountDownLatch shutdown = new CountDownLatch(1);
-        ServiceStop stop = new ServiceStop(handler);
+        ServiceStop stop = new ServiceStop(handler::withdraw);
         Outcome outcome = new Outcome();
 
         // The hook never waits for the thread that exits the process: it stops the service, which it waits
@@ -359,11 +289,14 @@ public final class IdentitySkuApplication {
                             builder.invitationDelivery(plan.invitationDelivery());
                         }
                         IdentityComposition built = builder.build();
-                        if (stop.admit(built)) {
+                        if (stop.admit(() -> built.stop(DRAIN))) {
                             // Host parts are created before the kernel boots; they get the executor now,
                             // before start() runs any job and before handler.serve() lets any request in.
                             plan.joinTransactions(built.transactionalExecutor());
-                            built.start();
+                            if (!built.tryStart()) {
+                                // A stop won between the admission and the start: nothing is started.
+                                return;
+                            }
                             handler.serve(built.httpHandler());
                             outcome.serving = true;
                             LOG.log(System.Logger.Level.INFO, "Exeris Identity running on {0}:{1}",

@@ -83,8 +83,15 @@ public final class IdentityComposition {
     private final IdentityServices services;
     private final JoiningTransactionalExecutor transactions;
     private State state = State.BUILT;
+    private boolean startAttempted;
 
-    private enum State { BUILT, STARTED, STOPPED }
+    /**
+     * BUILT, then STARTING, STARTED, STOPPING, STOPPED. Every transition happens under this object's
+     * monitor, and {@code start} and {@code stop} hold it for their whole run, so STARTING and STOPPING are
+     * never observed by another thread: a caller either sees the composition before the operation or after
+     * it. A stop from BUILT goes straight to STOPPED, and STOPPED is final.
+     */
+    private enum State { BUILT, STARTING, STARTED, STOPPING, STOPPED }
 
     private IdentityComposition(ServiceBoundaryCoreModule serviceBoundary, List<CapabilityLifecycleHooks> readyOrder,
                                 JwtAdmissionPolicy jwtPolicy, JwtServiceBoundaryBinding jwtBinding,
@@ -112,13 +119,44 @@ public final class IdentityComposition {
      * built over a key set that already holds a signing key, and the service boundary last, which freezes
      * the route registry. A failure terminates what had been initialised and is rethrown.
      *
+     * <p>A composition is started at most once, and never after {@link #stop(Duration)}: a stop that came
+     * first is final, so the call is refused rather than ignored, because an embedding host that asked for a
+     * stop and then started the service would otherwise be left with a service nothing will stop.
+     *
+     * @throws IllegalStateException when the composition has been started or has been stopped
      * @throws Exception the failure of the capability that did not start
      */
     public synchronized void start() throws Exception {
+        if (state == State.STOPPED && !startAttempted) {
+            throw new IllegalStateException("the composition has been stopped");
+        }
         if (state != State.BUILT) {
             throw new IllegalStateException("the composition has been started");
         }
-        state = State.STARTED;
+        beginStart();
+    }
+
+    /**
+     * Starts the composition unless a stop has already been requested, in which case it stays unstarted.
+     * This is the call for a host that stops from another thread: the check and the start are one step under
+     * the composition's monitor, so a stop either precedes it, and nothing starts, or follows it, and waits
+     * for the start to finish and then stops what started.
+     *
+     * @return {@code true} when the composition started; {@code false} when a stop came first
+     * @throws IllegalStateException when the composition has already been started
+     * @throws Exception the failure of the capability that did not start
+     */
+    public synchronized boolean tryStart() throws Exception {
+        if (state == State.STOPPED && !startAttempted) {
+            return false;
+        }
+        start();
+        return true;
+    }
+
+    private void beginStart() throws Exception {
+        startAttempted = true;
+        state = State.STARTING;
         int initialised = 0;
         try {
             for (CapabilityLifecycleHooks module : readyOrder) {
@@ -128,6 +166,7 @@ public final class IdentityComposition {
             for (CapabilityLifecycleHooks module : readyOrder) {
                 module.ready();
             }
+            state = State.STARTED;
         } catch (Exception | Error failure) {
             terminateFirst(initialised);
             state = State.STOPPED;
@@ -136,25 +175,35 @@ public final class IdentityComposition {
     }
 
     /**
-     * Drains every capability, then terminates them, in the reverse order of start. Calling it when not
-     * started does nothing.
+     * Drains every capability, then terminates them, in the reverse order of start. Stopping a composition
+     * that has not been started records the stop: it stays unstarted and {@link #start()} refuses it
+     * afterwards. A stop that arrives while another thread is starting waits for the start to finish and then
+     * stops what started. Stopping a stopped composition does nothing.
      *
      * @param drainTimeout how long each capability may take to drain in-flight work
      */
     public synchronized void stop(Duration drainTimeout) {
+        if (state == State.BUILT) {
+            state = State.STOPPED;
+            return;
+        }
         if (state != State.STARTED) {
             return;
         }
-        state = State.STOPPED;
-        for (int i = readyOrder.size() - 1; i >= 0; i--) {
-            try {
-                readyOrder.get(i).drain(drainTimeout);
-            } catch (Exception e) {
-                System.getLogger(IdentityComposition.class.getName())
-                        .log(System.Logger.Level.WARNING, "draining a capability failed", e);
+        state = State.STOPPING;
+        try {
+            for (int i = readyOrder.size() - 1; i >= 0; i--) {
+                try {
+                    readyOrder.get(i).drain(drainTimeout);
+                } catch (Exception e) {
+                    System.getLogger(IdentityComposition.class.getName())
+                            .log(System.Logger.Level.WARNING, "draining a capability failed", e);
+                }
             }
+            terminateFirst(readyOrder.size());
+        } finally {
+            state = State.STOPPED;
         }
-        terminateFirst(readyOrder.size());
     }
 
     private void terminateFirst(int count) {
