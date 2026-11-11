@@ -4,9 +4,7 @@ import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.LaunchedProcess;
 import eu.exeris.sku.identity.support.PostgresSupport;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -364,24 +362,125 @@ class ServeInterruptClassificationTest {
         assertThat(reference).contains("does not guess");
     }
 
-    // ---- defects ----------------------------------------------------------------------------------------
+    // ---- subclasses of InterruptedIOException ----------------------------------------------------------
 
-    /**
-     * An {@link InterruptedIOException} is also what a socket timeout is: {@link SocketTimeoutException}
-     * extends it. A timeout is a failure of the network, not an interrupt, and the flag being set for another
-     * reason must not turn it into a stop.
-     */
-    @Nested
-    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    class KnownDefects {
+    /** A subclass of {@link InterruptedIOException} that is not an interrupt, as a driver may define one. */
+    private static final class TransferTimedOut extends InterruptedIOException {
+        private static final long serialVersionUID = 1L;
 
-        @Test
-        @DisplayName("A socket timeout in the cause chain, with the flag set, is a failure of the network and not a stop")
-        void socketTimeoutIsNotAStop() throws Exception {
-            Throwable timeout = new RuntimeException("connect", new SQLException("The connection attempt failed.",
-                    "08001", new SocketTimeoutException("Connect timed out")));
-
-            assertThat(classify(timeout, true)[0]).isFalse();
+        TransferTimedOut(String message) {
+            super(message);
         }
+    }
+
+    private static List<Throwable> notInterrupts() {
+        return List.of(new SocketTimeoutException("Connect timed out"), new TransferTimedOut("transfer timed out"),
+                new java.net.http.HttpTimeoutException("request timed out"));
+    }
+
+    @Test
+    @DisplayName("A socket timeout, or any other subclass of InterruptedIOException, is a failure of the network whatever the flag: directly and nested at depth 1, 3 and 7")
+    void subclassesOfInterruptedIoAreNotAStop() throws Exception {
+        for (Throwable cause : notInterrupts()) {
+            for (int depth : new int[] {0, 1, 3, 7}) {
+                for (boolean flag : new boolean[] {true, false}) {
+                    Throwable failure = depth == 0 ? cause : chain(cause, depth);
+
+                    boolean[] result = classify(failure, flag);
+
+                    assertThat(result[0]).as("%s at depth %d, flag %s", cause.getClass().getSimpleName(), depth, flag)
+                            .isFalse();
+                    assertThat(result[1]).as("the flag is neither set nor cleared").isEqualTo(flag);
+                }
+            }
+        }
+        Throwable timeout = new RuntimeException("connect", new SQLException("The connection attempt failed.",
+                "08001", new SocketTimeoutException("Connect timed out")));
+        assertThat(classify(timeout, true)[0]).isFalse();
+    }
+
+    @Test
+    @DisplayName("A subclass of InterruptedIOException that carries a real interrupt cause is a stop, and an exact InterruptedIOException that wraps a timeout is a stop: the exact class decides, not what is around it")
+    void exactClassDecidesAtEachLevel() throws Exception {
+        Throwable timeoutWithInterrupt = new SocketTimeoutException("timed out");
+        timeoutWithInterrupt.initCause(new InterruptedException("the interrupt"));
+        InterruptedIOException exactOverTimeout = new InterruptedIOException("interrupted");
+        exactOverTimeout.initCause(new SocketTimeoutException("timed out"));
+
+        assertThat(classify(chain(timeoutWithInterrupt, 3), true)[0]).isTrue();
+        assertThat(classify(chain(exactOverTimeout, 3), true)[0]).isTrue();
+        assertThat(classify(chain(timeoutWithInterrupt, 3), false)[0]).isFalse();
+        assertThat(classify(chain(exactOverTimeout, 3), false)[0]).isFalse();
+    }
+
+    @Test
+    @DisplayName("The exact InterruptedIOException, the ClosedByInterruptException and the InterruptedException are a stop with the flag set and a failure with it cleared, directly and nested at depth 3")
+    void exactInterruptCausesBothWays() throws Exception {
+        for (Throwable cause : List.of(new InterruptedIOException("x"), new ClosedByInterruptException(),
+                new InterruptedException("x"))) {
+            for (int depth : new int[] {0, 3}) {
+                Throwable failure = depth == 0 ? cause : chain(cause, depth);
+
+                assertThat(classify(failure, true)[0]).as("%s, depth %d, flag set", cause.getClass().getSimpleName(),
+                        depth).isTrue();
+                assertThat(classify(failure, false)[0]).as("%s, depth %d, flag cleared",
+                        cause.getClass().getSimpleName(), depth).isFalse();
+            }
+        }
+    }
+
+    // ---- the checks are never a stop ------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A refused configuration is status 78 with its refusal logged, or 0 with only the stop line when the interrupt came first: an interrupt that arrives at any moment never produces a mixture")
+    void configurationRefusalIsNeverReclassified() throws Exception {
+        for (int round = 0; round < 200; round++) {
+            try (Capture capture = new Capture()) {
+                int[] status = {Integer.MIN_VALUE};
+                boolean[] flagAfter = new boolean[1];
+                Thread serving = new Thread(() -> {
+                    status[0] = IdentitySkuApplication.serve(Map.of());
+                    flagAfter[0] = Thread.currentThread().isInterrupted();
+                }, "serve-under-test");
+                serving.setDaemon(true);
+                int delayMicros = (round % 20) * 150;
+                Thread interrupter = new Thread(() -> {
+                    long until = System.nanoTime() + delayMicros * 1_000L;
+                    while (System.nanoTime() < until) {
+                        Thread.onSpinWait();
+                    }
+                    serving.interrupt();
+                }, "interrupter");
+                interrupter.setDaemon(true);
+                interrupter.start();
+                serving.start();
+                serving.join(TimeUnit.SECONDS.toMillis(BOUND_SECONDS));
+                interrupter.join(TimeUnit.SECONDS.toMillis(BOUND_SECONDS));
+
+                assertThat(serving.isAlive()).isFalse();
+                if (status[0] == IdentitySkuApplication.EXIT_CONFIG) {
+                    assertThat(capture.records.stream().filter(r -> r.getLevel() == Level.SEVERE)).hasSize(1);
+                } else {
+                    assertThat(status[0]).as("round %d", round).isZero();
+                    assertThat(capture.records.stream().filter(r -> r.getLevel().intValue() >= Level.WARNING.intValue()))
+                            .isEmpty();
+                    assertThat(flagAfter[0]).isTrue();
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("The launcher reference states how a failure is classified, that the configuration and role checks are never a stop, and that a flag set at entry means nothing is checked")
+    void referenceStatesTheClassification() throws IOException {
+        String reference = Files.readString(Path.of("docs", "reference", "launcher.md"));
+
+        assertThat(reference).contains("where an `InterruptedIOException` counts only by its exact class");
+        assertThat(reference).contains("A subclass of it does not count");
+        assertThat(reference).contains("a `SocketTimeoutException` is a connect or read timeout");
+        assertThat(reference).contains("it is a failure of the network whatever the flag");
+        assertThat(reference).contains("The configuration check and the database role check are never classified as a stop");
+        assertThat(reference).contains("with the flag already set when `serve` is called nothing is checked");
+        assertThat(reference).contains("so a configuration or role error is not reported in that call: it ends with 0");
     }
 }
