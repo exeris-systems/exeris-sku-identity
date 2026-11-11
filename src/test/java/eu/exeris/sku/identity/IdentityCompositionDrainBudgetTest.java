@@ -833,7 +833,7 @@ class IdentityCompositionDrainBudgetTest {
      * stop and the process with it.
      */
     @org.junit.jupiter.api.Nested
-    @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
+    @DisplayName("Flag, timeout bounds and the reference text")
     class KnownDefects {
 
         @Test
