@@ -28,7 +28,7 @@ The jar's manifest names the launcher as its main class and `lib/` as its class 
 | `migrate` | 0 | the migrations were applied, or the schema was already current |
 | `migrate` | 1 | the database refused a migration or could not be reached; the SQLSTATE is logged |
 | `migrate` | 78 | the migration settings cannot be used |
-| `serve` | 0 | the service ran and its stop was requested by an interrupt of the launcher's thread, which only an embedding host can do; a stop by signal never reports 0 |
+| `serve` | 0 | the service was stopped on request by an interrupt of the launcher's thread, which only an embedding host can do; an interrupt that arrives before the composition has started ends the call the same way and the service never serves. A stop by signal never reports 0 |
 | `serve` | 143 (Linux; 128 plus the signal number) | the service ran and was stopped by SIGTERM; the JVM reports the signal, whatever the launcher returned. |
 | `serve` | 69 | the database cannot be used: it cannot be reached, or it refuses the service role's credentials (a wrong password is logged as SQLSTATE 28P01); a JDBC URL that carries credentials in its authority (`//user:password@host`) also ends here, with SQLSTATE 08001, because the PostgreSQL driver does not honour them. The service did not start |
 | `serve` | 70 | the kernel did not boot, for example without a licence manifest; or the service failed while starting, while serving or while stopping, or a class could not be loaded or initialised at start. One ERROR line is logged. For a kernel that did not boot it carries the kernel's message, such as the licence gate's code and reason, with the database password and any password in a connection URL withheld; for a failure of the service or of a class it names only the exception class. A fatal VM error such as running out of memory also ends with 70, at once and without running the shutdown hooks |
@@ -41,9 +41,41 @@ No ending of `serve` is an uncaught exception. A supervisor should treat 0 and 1
 
 On SIGTERM the service stops answering (requests get 503), drains in-flight work for at most 15 s per capability, stops its capabilities once, and then the kernel stops its subsystems. A service that no client has kept a connection to stops in under a second.
 
+The stop notice, `Shutdown signal received, draining`, is written once to the standard error by the shutdown hook itself, not through the logging framework: the framework's own shutdown hook runs at the same time and removes its handlers, so a record logged from a hook can be lost. A stop requested while a host part is still joining the transactions, before the composition has started, starts nothing and never logs `Exeris Identity running on`.
+
 A connection that a client keeps open can delay the stop by the kernel's HTTP idle timeout (30 s by default). The kernel counts a keep-alive connection as busy while it is parked between requests when its last request was slow, meaning more than about 100 ms from the start of that connection's request-loop iteration to the end of the handler, a time that includes how long the client took to send the request. The stop then waits for the idle timeout to reclaim the connection, and the stopping thread spins on a CPU meanwhile. Any client that pauses more than about 100 ms between requests on a connection it keeps open triggers this, for example a health probe that polls once a second. This is [exeris-kernel issue 835](https://github.com/exeris-systems/exeris-kernel/issues/835), seen with kernel 0.13.1. With the default idle timeout the stop took about 30 to 35 s; a service that no client holds a connection to stops in under a second. Closing the clients' connections before the stop avoids the delay, for example by taking the instance out of the load balancer's rotation before signalling it.
 
 Give the process a stop grace of at least 60 s (for example `TimeoutStopSec=60` in systemd, `--stop-timeout 60` for a container) so the supervisor does not kill it mid-drain with SIGKILL.
+
+### Secrets in the launcher's output
+
+A message that the kernel or a driver produced is passed through a redaction before the launcher logs it. A withheld value is replaced by `<withheld>`; a message with nothing to say is logged as `(no message)`. The launcher gives two different assurances.
+
+**Configured secrets: always.** The database password (`EXERIS_DATABASE_*`) is withheld wherever it occurs in such a message, in these forms:
+
+| Form | Matched |
+| --- | --- |
+| literal | the text as configured, case-sensitive: a differently cased string is another string |
+| percent-encoded | any mix of literal characters and `%XX` escapes of the secret's UTF-8 bytes, upper-case or lower-case hexadecimal, and `+` for a space where the secret has a space |
+| Base64, Base64url | the encoding of the secret's UTF-8 bytes, with and without padding, as a contiguous run |
+
+A secret shorter than 3 characters is withheld only where the structure rules below name it. At most 8 distinct secrets and 64 match patterns are accepted; beyond that the launcher logs `(message withheld)` instead of the message. Not recognised: a secret split by a line break, encoded twice, or inside a longer Base64 payload.
+
+**Other credentials in third-party messages: best effort.** The launcher also withholds credentials it recognises by shape, without knowing them. A shape that is not in the table passes through.
+
+| Context | Withheld |
+| --- | --- |
+| password of a `://user:password@host` authority | the text between the first colon after the scheme and the first `@` |
+| quoted value after `=` or `:` of a sensitive name | the text up to the first closing quote of the same kind; `\"` and a doubled quote do not close it; an unclosed value runs to the end of the message |
+| name wrapped in quotes (`"password": x`) with an unquoted value | up to `,`, `}`, `]`, `)`, `&`, `;`, a quote or white space |
+| unquoted value of a password name, in a URL query (name directly after `?`, `&` or `;`) | up to `&`, `;`, a quote, `)` or white space |
+| unquoted value of a password name, anywhere else | up to the end of the line, so `password=my secret pass` and `host=h password=p dbname=d` lose everything after the `=` |
+| unquoted value of another sensitive name | up to `&`, `;`, `,`, a quote, `)` or white space; a value that contains one of them leaks its tail |
+| `Authorization:` and `Proxy-Authorization:` lines | everything after the scheme, to the end of the line |
+| `Cookie:` and `Set-Cookie:` lines | everything after the colon, to the end of the line |
+| `--<sensitive name> <word>` | the next word |
+
+A name is a run of letters, digits, `_`, `.` and `-`. A *password name* contains `password`, `passwd`, `pwd` or `passphrase`, in any case. A *sensitive name* is a password name, or contains `secret`, `token` or `credential`, or ends in a key word: its last component (split at `_`, `.`, `-` and case changes) is `key`, or `api`, `ssl`, `tls`, `private`, `access`, `secret`, `auth`, `encryption`, `signing`, `master`, `hmac`, `pass`, `session`, `client`, `license`, `aes`, `rsa` or `jwt` followed by `key`. `monkey`, `keystore` and `key_id` are not sensitive. `Name.java:42` is a stack-trace position, never a label. The `=` form of `authorization` and `cookie`, the short flag `-p<value>`, and a secret in free text (`password is hunter2`) are not covered.
 
 ## `bootstrap-owner`
 
