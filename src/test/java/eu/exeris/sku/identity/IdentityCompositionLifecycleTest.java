@@ -714,7 +714,6 @@ class IdentityCompositionLifecycleTest {
     /** The unwind the capability lifecycle contract describes for a failed start; the composition does not do it. */
     @org.junit.jupiter.api.Nested
     @DisplayName("Known defects (run with -Didentity.knownDefects=true)")
-    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "identity.knownDefects", matches = "true")
     class KnownDefects {
 
         @Test

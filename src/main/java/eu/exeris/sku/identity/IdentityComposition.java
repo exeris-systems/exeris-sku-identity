@@ -75,6 +75,9 @@ public final class IdentityComposition {
     /** The public key-set route the token issuer registers once it is ready. */
     static final String JWKS_ROUTE = "GET /.well-known/jwks.json";
 
+    /** The time each capability may take to drain when a start fails; nothing has been served by then. */
+    private static final Duration START_FAILURE_DRAIN = Duration.ofSeconds(5);
+
     private final ServiceBoundaryCoreModule serviceBoundary;
     private final List<CapabilityLifecycleHooks> readyOrder;
     private final JwtAdmissionPolicy jwtPolicy;
@@ -127,8 +130,18 @@ public final class IdentityComposition {
      * <p>A capability whose {@code initialize} threw is terminated with the ones initialised before it:
      * {@code CapabilityLifecycleHooks#terminate()} is owed to every capability that entered
      * {@code initialize}, whether or not it completed, and a half-initialised capability is the one most
-     * likely to hold something to release. A capability that was never reached is not terminated. Nothing has
-     * been served when a start fails, so the capabilities are terminated without a drain.
+     * likely to hold something to release. A capability that was never reached is not terminated.
+     *
+     * <p>The unwind follows the capability lifecycle contract. When {@code initialize} fails at capability
+     * <i>k</i>, the capabilities that completed it are drained in reverse order, <i>k</i> is not drained
+     * because it never completed {@code initialize} and so has no intake, and then <i>k</i> and the ones
+     * before it are terminated in reverse order. When {@code ready} fails, every capability is drained in
+     * reverse order and then every one is terminated. A drain or terminate that throws an exception is
+     * logged; an {@link Error} is remembered, the first one with the later ones suppressed, and every
+     * remaining capability is still drained and terminated. The failure of the start is the exception
+     * thrown, with a cleanup {@link Error} attached to it as suppressed, except that a
+     * {@link VirtualMachineError} from the cleanup takes its place and carries the start failure as
+     * suppressed.
      *
      * @throws IllegalStateException when the composition has been started, when its start failed, or when it
      *                               has been stopped; the message says which
@@ -177,18 +190,21 @@ public final class IdentityComposition {
         startAttempted = true;
         state = State.STARTING;
         int entered = 0;
+        boolean initialized = false;
         try {
             for (CapabilityLifecycleHooks module : readyOrder) {
                 entered++;
                 module.initialize();
             }
+            initialized = true;
             for (CapabilityLifecycleHooks module : readyOrder) {
                 module.ready();
             }
             state = State.STARTED;
         } catch (Exception | Error failure) {
             startFailed = true;
-            Error cleanup = terminateFirst(entered);
+            int drained = initialized ? entered : entered - 1;
+            Error cleanup = remember(drainFirst(drained, START_FAILURE_DRAIN), terminateFirst(entered));
             state = State.STOPPED;
             if (cleanup instanceof VirtualMachineError && !(failure instanceof VirtualMachineError)) {
                 cleanup.addSuppressed(failure);
@@ -226,23 +242,35 @@ public final class IdentityComposition {
         state = State.STOPPING;
         Error failure = null;
         try {
-            for (int i = readyOrder.size() - 1; i >= 0; i--) {
-                try {
-                    readyOrder.get(i).drain(drainTimeout);
-                } catch (Exception e) {
-                    System.getLogger(IdentityComposition.class.getName())
-                            .log(System.Logger.Level.WARNING, "draining a capability failed", e);
-                } catch (Error e) {
-                    failure = remember(failure, e);
-                }
-            }
-            failure = remember(failure, terminateFirst(readyOrder.size()));
+            failure = remember(drainFirst(readyOrder.size(), drainTimeout), terminateFirst(readyOrder.size()));
         } finally {
             state = State.STOPPED;
         }
         if (failure != null) {
             throw failure;
         }
+    }
+
+    /**
+     * Drains the first {@code count} capabilities in reverse order, every one of them whatever an earlier
+     * one threw.
+     *
+     * @return the first {@link Error} a drain threw, with the later ones suppressed; {@code null} when
+     *         there was none. An {@link Exception} is logged and goes no further.
+     */
+    private Error drainFirst(int count, Duration drainTimeout) {
+        Error failure = null;
+        for (int i = count - 1; i >= 0; i--) {
+            try {
+                readyOrder.get(i).drain(drainTimeout);
+            } catch (Exception e) {
+                System.getLogger(IdentityComposition.class.getName())
+                        .log(System.Logger.Level.WARNING, "draining a capability failed", e);
+            } catch (Error e) {
+                failure = remember(failure, e);
+            }
+        }
+        return failure;
     }
 
     /**
