@@ -27,6 +27,9 @@ class ServeKernelBootIT {
             "The kernel did not boot", "failed while starting", "failed after it began serving",
             "Stopping Identity failed", "Exception in thread \"main\""};
 
+    /** 128 plus the signal number of SIGTERM, which is what a JVM stopped by it reports on Linux. */
+    private static final int SIGTERM_STATUS = 143;
+
     private static String manifest;
 
     @BeforeAll
@@ -67,9 +70,10 @@ class ServeKernelBootIT {
             }
 
             assertThat(process.isAlive()).isFalse();
-            // A JVM ended by a termination signal reports 128 + 15 whatever main returned; a service
-            // that stopped cleanly reports success. Either is a stop on request, anything else is not.
-            assertThat(status).as(process.output()).isIn(0, 143);
+            // A JVM ended by a termination signal reports 128 + 15 whatever main returned.
+            assertThat(status).as(process.output()).isEqualTo(SIGTERM_STATUS);
+            assertThat(process.output().split("Shutdown signal received", -1)).as("occurrences of the signal line")
+                    .hasSize(2);
             assertThat(ServeSupport.accepts(port)).as("the port after the stop").isFalse();
             for (String signature : FAILURE_SIGNATURES) {
                 assertThat(process.output()).doesNotContain(signature);
@@ -110,7 +114,7 @@ class ServeKernelBootIT {
         Map<String, String> healthy = environment(database, port, InMemoryMembershipDirectory.class.getName());
         try (LaunchedProcess second = LaunchedProcess.start(healthy)) {
             ServeSupport.awaitHealthy(second, port);
-            assertThat(second.terminate(60)).isIn(0, 143);
+            assertThat(second.terminate(60)).isEqualTo(SIGTERM_STATUS);
         }
     }
 
@@ -131,7 +135,7 @@ class ServeKernelBootIT {
         try (LaunchedProcess second = LaunchedProcess.start(
                 environment(database, port, InMemoryMembershipDirectory.class.getName()))) {
             ServeSupport.awaitHealthy(second, port);
-            assertThat(second.terminate(60)).isIn(0, 143);
+            assertThat(second.terminate(60)).isEqualTo(SIGTERM_STATUS);
         }
     }
 

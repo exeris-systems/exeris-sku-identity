@@ -33,7 +33,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,23 +117,9 @@ class IdentityProcessIT {
         return HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path));
     }
 
+    /** Waits for the "running on" line and probes once on a closed connection; see {@link ServeSupport}. */
     private static void awaitHealthy() throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(90);
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive()) {
-                throw new AssertionError("the service exited before it was healthy" + System.lineSeparator()
-                        + process.output());
-            }
-            try {
-                if (send(to("/health").GET()).statusCode() == 200) {
-                    return;
-                }
-            } catch (Exception notUpYet) {
-                // keep waiting
-            }
-            Thread.sleep(250);
-        }
-        throw new AssertionError("the service did not become healthy" + System.lineSeparator() + process.output());
+        ServeSupport.awaitHealthy(process, port);
     }
 
     private static HttpResponse<String> login() throws Exception {
