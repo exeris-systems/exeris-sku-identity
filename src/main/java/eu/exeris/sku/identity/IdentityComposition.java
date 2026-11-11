@@ -280,7 +280,10 @@ public final class IdentityComposition {
      * <p>A drain runs on the calling thread, which keeps the bindings the thread carries, and a watchdog
      * interrupts that thread at the deadline. The interrupt flag the thread had on entry is what it has on
      * return: an interrupt the watchdog delivered is cleared and never reaches the next drain or any
-     * terminate.
+     * terminate, and a flag the thread entered with is set again however the drain ended, including when
+     * the drain consumed it by throwing {@link InterruptedException}. The flag is cleared on the way out only
+     * when the watchdog fired, and the watchdog cannot interrupt once the drain has ended; an interrupt from
+     * any other source that arrives while the drain runs and is not consumed by it stays set.
      *
      * @return the first {@link Error} a drain threw, with the later ones suppressed; {@code null} when
      *         there was none. An {@link Exception} is logged and goes no further.
@@ -355,9 +358,9 @@ public final class IdentityComposition {
             watchdog.interrupt();
             if (fired[0]) {
                 Thread.interrupted();
-                if (flagOnEntry) {
-                    caller.interrupt();
-                }
+            }
+            if (flagOnEntry) {
+                caller.interrupt();
             }
         }
         return !fired[0];
