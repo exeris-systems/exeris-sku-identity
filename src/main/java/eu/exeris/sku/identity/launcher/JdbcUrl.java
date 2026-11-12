@@ -1,6 +1,9 @@
 package eu.exeris.sku.identity.launcher;
 
-import java.util.Locale;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -16,10 +19,13 @@ import java.util.regex.Pattern;
  * A host is a name, an IPv4 address or a bracketed IPv6 address; a port is a number from 1 to 65535. The
  * authority holds no user-info: an {@code @} anywhere in it is a refusal, because credentials belong in the
  * user and password settings. The database name is made of letters, digits and {@code . _ ~ -}, with
- * percent-escapes. No fragment is accepted. A query parameter must have a plain name and a well-formed
- * value and must not name the user or a password: {@code user}, {@code password}, {@code sslpassword} or any
- * name that contains {@code password}, {@code passwd}, {@code pwd} or {@code passphrase}, in any case and in
- * any percent-escaped spelling.
+ * percent-escapes. No fragment is accepted. A query parameter is accepted only when it is on the list of
+ * {@link #PARAMETERS} and its value has that parameter's grammar; names are matched exactly and in case as
+ * the driver spells them, with no percent-escape, and a name that appears twice is refused. Everything else
+ * is refused before the driver is called, because the driver quotes the value of a parameter it cannot read
+ * in its own log records. The list holds what a deployment tunes (TLS mode, timeouts, host selection, a few
+ * session settings) and nothing that names a class, a file or a socket, carries free text to the server,
+ * changes logging, or is a credential or an alias of one.
  */
 final class JdbcUrl {
 
@@ -28,7 +34,13 @@ final class JdbcUrl {
     private static final Pattern IPV6_HOST = Pattern.compile("\\[[0-9A-Fa-f:.]+]");
     private static final Pattern PORT = Pattern.compile("[0-9]{1,5}");
     private static final Pattern DATABASE = Pattern.compile("[A-Za-z0-9._~%-]+");
-    private static final Pattern PARAMETER = Pattern.compile("[A-Za-z][A-Za-z0-9_.-]*");
+    private static final Pattern BOOLEAN = Pattern.compile("true|false");
+    private static final Pattern IDENTIFIER_LIST = Pattern.compile("[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*");
+    private static final Pattern APPLICATION_NAME = Pattern.compile("[A-Za-z0-9._-]{1,63}");
+    private static final Pattern VERSION = Pattern.compile("[0-9]{1,6}(\\.[0-9]{1,6}){0,2}");
+
+    /** The parameters of the URL's query and the value each accepts; the maximum length of a list is 255. */
+    private static final Map<String, Predicate<String>> PARAMETERS = parameters();
 
     private JdbcUrl() {
     }
@@ -94,60 +106,59 @@ final class JdbcUrl {
         return true;
     }
 
+    private static Map<String, Predicate<String>> parameters() {
+        Predicate<String> seconds = number(86_400);
+        return Map.ofEntries(
+                Map.entry("ssl", BOOLEAN.asMatchPredicate()),
+                Map.entry("sslmode", words("disable", "allow", "prefer", "require", "verify-ca", "verify-full")),
+                Map.entry("connectTimeout", seconds),
+                Map.entry("socketTimeout", seconds),
+                Map.entry("loginTimeout", seconds),
+                Map.entry("cancelSignalTimeout", seconds),
+                Map.entry("hostRecheckSeconds", seconds),
+                Map.entry("tcpKeepAlive", BOOLEAN.asMatchPredicate()),
+                Map.entry("prepareThreshold", number(10_000)),
+                Map.entry("defaultRowFetchSize", number(1_000_000)),
+                Map.entry("targetServerType", words("any", "primary", "master", "slave", "secondary",
+                        "preferSlave", "preferSecondary", "preferPrimary")),
+                Map.entry("loadBalanceHosts", BOOLEAN.asMatchPredicate()),
+                Map.entry("reWriteBatchedInserts", BOOLEAN.asMatchPredicate()),
+                Map.entry("ApplicationName", APPLICATION_NAME.asMatchPredicate()),
+                Map.entry("currentSchema", value -> value.length() <= 255 && IDENTIFIER_LIST.matcher(value).matches()),
+                Map.entry("stringtype", words("unspecified", "varchar")),
+                Map.entry("assumeMinServerVersion", VERSION.asMatchPredicate()),
+                Map.entry("gssEncMode", words("disable", "allow", "prefer", "require")),
+                Map.entry("channelBinding", words("disable", "prefer", "require")));
+    }
+
+    private static Predicate<String> words(String... accepted) {
+        Set<String> set = Set.of(accepted);
+        return set::contains;
+    }
+
+    /** A decimal integer without sign or leading plus, from 0 to the maximum. */
+    private static Predicate<String> number(int maximum) {
+        return value -> value.length() >= 1 && value.length() <= 9 && value.chars().allMatch(c -> c >= '0' && c <= '9')
+                && Integer.parseInt(value) <= maximum;
+    }
+
     private static boolean parameters(String query) {
         if (query.isEmpty()) {
             return false;
         }
+        Set<String> seen = new HashSet<>();
         for (String parameter : query.split("&", -1)) {
             int equals = parameter.indexOf('=');
-            String name = equals < 0 ? parameter : parameter.substring(0, equals);
-            String value = equals < 0 ? "" : parameter.substring(equals + 1);
-            String decoded = decode(name);
-            if (decoded == null || !PARAMETER.matcher(decoded).matches() || namesCredential(decoded)
-                    || !wellFormedEscapes(value) || containsBlankOrControl(value)) {
+            if (equals < 0) {
+                return false;
+            }
+            String name = parameter.substring(0, equals);
+            Predicate<String> grammar = PARAMETERS.get(name);
+            if (grammar == null || !seen.add(name) || !grammar.test(parameter.substring(equals + 1))) {
                 return false;
             }
         }
         return true;
-    }
-
-    private static boolean namesCredential(String name) {
-        String lower = name.toLowerCase(Locale.ROOT);
-        return lower.equals("user") || lower.contains("password") || lower.contains("passwd")
-                || lower.contains("pwd") || lower.contains("passphrase");
-    }
-
-    private static boolean containsBlankOrControl(String value) {
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c <= ' ' || c == 0x7f) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** The name with its percent-escapes of ASCII characters decoded; null when an escape is malformed. */
-    private static String decode(String name) {
-        StringBuilder out = new StringBuilder(name.length());
-        for (int i = 0; i < name.length(); i++) {
-            char c = name.charAt(i);
-            if (c != '%') {
-                out.append(c);
-                continue;
-            }
-            if (i + 2 >= name.length()) {
-                return null;
-            }
-            int high = Character.digit(name.charAt(i + 1), 16);
-            int low = Character.digit(name.charAt(i + 2), 16);
-            if (high < 0 || low < 0 || high > 7) {
-                return null;
-            }
-            out.append((char) (high * 16 + low));
-            i += 2;
-        }
-        return out.toString();
     }
 
     private static boolean wellFormedEscapes(String text) {

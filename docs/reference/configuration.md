@@ -84,7 +84,24 @@ The launcher parses the database URL itself and calls the PostgreSQL driver only
 - The scheme is `jdbc:postgresql://`.
 - The authority holds one or more hosts separated by commas. A host is a name, an IPv4 address or an IPv6 address in brackets, with an optional port from 1 to 65535. **It holds no user-info: an `@` anywhere in the authority is a refusal.** Credentials go in the user and password settings.
 - A database name follows the first `/`: letters, digits and `. _ ~ -`, with well-formed percent-escapes. A URL without one is refused, and so is a fragment (`#`).
-- A query is optional. Every parameter has a plain name and a well-formed value. A parameter named `user`, `password` or `sslpassword`, or any name that contains `password`, `passwd`, `pwd` or `passphrase` in any case or percent-escaped spelling, is refused: a credential in the URL's query would be printed by any message that quotes the URL.
+- A query is optional. The query holds only the parameters of the table below, each once, with a value of the grammar given there.
+
+| Parameter | Value |
+| --- | --- |
+| `ssl`, `tcpKeepAlive`, `loadBalanceHosts`, `reWriteBatchedInserts` | `true` or `false` |
+| `sslmode` | `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full` |
+| `connectTimeout`, `socketTimeout`, `loginTimeout`, `cancelSignalTimeout`, `hostRecheckSeconds` | a decimal integer from 0 to 86400 (seconds) |
+| `prepareThreshold` | a decimal integer from 0 to 10000 |
+| `defaultRowFetchSize` | a decimal integer from 0 to 1000000 |
+| `targetServerType` | `any`, `primary`, `master`, `slave`, `secondary`, `preferSlave`, `preferSecondary` or `preferPrimary` |
+| `ApplicationName` | 1 to 63 characters of `A-Za-z0-9._-` |
+| `currentSchema` | identifiers of `A-Za-z0-9_` separated by commas, at most 255 characters |
+| `stringtype` | `unspecified` or `varchar` |
+| `assumeMinServerVersion` | one to three groups of up to six digits separated by dots, such as `12` or `14.2` |
+| `gssEncMode` | `disable`, `allow`, `prefer` or `require` |
+| `channelBinding` | `disable`, `prefer` or `require` |
+
+Names are matched exactly, in the case above, without percent-escapes; a value holds no percent-escape, blank or control character. A parameter that is not in the table, that has no value, or that appears twice is refused, whatever its value. So the settings that name a class (`socketFactory`, `sslfactory`, `authenticationPluginClassName`, `sslhostnameverifier`, `sslpasswordcallback`, `xmlFactoryFactory`), a file or a socket (`sslkey`, `sslcert`, `sslrootcert`, `passfile`, `loggerFile`, `localSocketAddress`, `service`, `socketFactoryArg`, `sslfactoryarg`), free text for the server (`options`), the driver's logging (`loggerLevel`) and every credential or alias of one (`user`, `password`, `sslpassword`, `PGPORT`, `PGHOST`, `PGDBNAME` and the like) are not available through the URL. A parameter named `user`, `password` or `sslpassword`, or any name that contains `password`, `passwd`, `pwd` or `passphrase` in any case or percent-escaped spelling, is refused: a credential in the URL's query would be printed by any message that quotes the URL.
 
 A URL that does not start with `jdbc:postgresql:` is a configuration problem (status 78) found while the settings are read. A URL that starts with it and does not have the form above is refused when the connection is opened: `serve` and `bootstrap-owner` end with status 69, `migrate` with status 1, all with SQLSTATE 08001 and a message that names no part of the URL.
 
