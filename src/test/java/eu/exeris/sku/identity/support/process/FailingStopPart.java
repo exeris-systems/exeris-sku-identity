@@ -108,7 +108,7 @@ public final class FailingStopPart implements MembershipDirectory, JoinsServiceT
             for (Field captured : action.getClass().getDeclaredFields()) {
                 captured.setAccessible(true);
                 Object value = captured.get(action);
-                if (value != null && value.getClass().getName().equals("eu.exeris.sku.identity.IdentityComposition")) {
+                if (value instanceof eu.exeris.sku.identity.IdentityComposition) {
                     composition = value;
                 }
             }
@@ -165,7 +165,7 @@ public final class FailingStopPart implements MembershipDirectory, JoinsServiceT
         for (Field captured : task.getClass().getDeclaredFields()) {
             captured.setAccessible(true);
             Object value = captured.get(task);
-            if (value != null && value.getClass().getSimpleName().equals("ServiceStop")) {
+            if (isOfType(value, "eu.exeris.sku.identity.launcher.ServiceStop")) {
                 return value;
             }
         }
@@ -182,7 +182,7 @@ public final class FailingStopPart implements MembershipDirectory, JoinsServiceT
     private static Object failing(Object module, List<String> fails, String marker) {
         Class<?> hooks = module.getClass().getInterfaces()[0];
         for (Class<?> type : allInterfaces(module.getClass())) {
-            if (type.getName().equals("eu.exeris.sdk.composition.lifecycle.CapabilityLifecycleHooks")) {
+            if (type == eu.exeris.sdk.composition.lifecycle.CapabilityLifecycleHooks.class) {
                 hooks = type;
             }
         }
@@ -224,5 +224,14 @@ public final class FailingStopPart implements MembershipDirectory, JoinsServiceT
     @Override
     public void grant(UUID tenantId, UUID subjectId, String role) {
         throw new IllegalStateException("unreachable");
+    }
+
+    /** Whether {@code value} is an instance of the named class, which this package cannot name in source. */
+    private static boolean isOfType(Object value, String className) {
+        try {
+            return Class.forName(className).isInstance(value);
+        } catch (ClassNotFoundException absent) {
+            return false;
+        }
     }
 }
