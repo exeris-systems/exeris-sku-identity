@@ -14,6 +14,8 @@ import java.sql.SQLException;
 record DatabaseSettings(String url, String user, String password) {
 
     private static final String SCHEME = "jdbc:postgresql:";
+    /** SQLSTATE of a connection that could not be established. */
+    private static final String REFUSED_URL_STATE = "08001";
 
     /**
      * Reads {@code <prefix>_URL}, {@code <prefix>_USER} and {@code <prefix>_PASSWORD(_FILE)}.
@@ -34,7 +36,19 @@ record DatabaseSettings(String url, String user, String password) {
         return new DatabaseSettings(url, user, password);
     }
 
+    /**
+     * Opens a connection. The driver is called only with a URL that {@link JdbcUrl} accepts, because the
+     * driver writes the URLs it cannot parse to the log. A refused URL is the connection failure SQLSTATE
+     * {@value #REFUSED_URL_STATE}, as if the driver had refused it, with a message that names no part of it.
+     *
+     * @return the connection
+     * @throws SQLException when the URL is refused or the database cannot be used
+     */
     Connection open() throws SQLException {
+        if (!JdbcUrl.acceptable(url)) {
+            throw new SQLException("The database URL is not a jdbc:postgresql://host[:port]/database URL without "
+                    + "credentials: the user and the password are separate settings.", REFUSED_URL_STATE);
+        }
         return DriverManager.getConnection(url, user, password);
     }
 

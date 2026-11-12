@@ -13,18 +13,18 @@ Every setting the launcher reads, the grammar of the keyrings and the pepper, an
 
 ## Settings
 
-**Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that holds the identity settings under the same names (not the database, `EXERIS_ENVIRONMENT` or host-part settings); the environment wins. A file with a name the service does not know is refused. A blank value counts as unset. Every secret takes either its name or its name plus `_FILE`, the path of a readable file, never both; a trailing line break in the file is removed.
+**Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that holds the identity settings under the same names (not the database, `EXERIS_ENVIRONMENT` or host-part settings); the environment wins. A line of the file that is not a known setting is refused by its line number, and its key is named only when it looks like a setting name (`EXERIS_` and capitals, digits and underscores). A blank value counts as unset. Every secret takes either its name or its name plus `_FILE`, the path of a readable file, never both; a trailing line break in the file is removed, and a password file larger than 1 MiB is refused. A message about a refused setting names the setting, a line number or a bound; it never repeats a value, a path or a line of a file.
 
 Launcher and database settings:
 
 | Name | Required | Meaning |
 | --- | --- | --- |
 | `EXERIS_ENVIRONMENT` | `serve`, `bootstrap-owner` | one of `development`, `staging`, `production`, `production-load-sim`, `dr-cold`, `dr-hot`; there is no default |
-| `EXERIS_DATABASE_URL` | `serve`, `bootstrap-owner` | JDBC URL of the database, starting `jdbc:postgresql:`. It carries no credentials: the PostgreSQL driver does not honour `//user:password@host`, and the service then ends with status 69 (SQLSTATE 08001). The role and its password go in `EXERIS_DATABASE_USER` and `EXERIS_DATABASE_PASSWORD` (or `_FILE`) |
+| `EXERIS_DATABASE_URL` | `serve`, `bootstrap-owner` | JDBC URL of the database, in the form `jdbc:postgresql://host[:port][,host[:port]...]/database[?name=value&...]` (see [the URL rule](#the-jdbc-url-rule)). A URL of another shape is refused before the driver sees it, with status 69 (SQLSTATE 08001) and a message that does not quote it. The role and its password go in `EXERIS_DATABASE_USER` and `EXERIS_DATABASE_PASSWORD` (or `_FILE`) |
 | `EXERIS_DATABASE_USER` | `serve`, `bootstrap-owner` | the service role |
 | `EXERIS_DATABASE_PASSWORD` or `_FILE` | `serve`, `bootstrap-owner` | the service role's password |
 | `EXERIS_DATABASE_MAX_POOL_SIZE` | no | most pooled connections, 1 to 1000, default 10 |
-| `EXERIS_MIGRATE_DATABASE_URL` | `migrate` | JDBC URL of the same database, starting `jdbc:postgresql:`, without credentials (see `EXERIS_DATABASE_URL`) |
+| `EXERIS_MIGRATE_DATABASE_URL` | `migrate` | JDBC URL of the same database, in the same form as `EXERIS_DATABASE_URL` and refused the same way, which for `migrate` is status 1 (SQLSTATE 08001) |
 | `EXERIS_MIGRATE_DATABASE_USER` | `migrate` | the migration role |
 | `EXERIS_MIGRATE_DATABASE_PASSWORD` or `_FILE` | `migrate` | the migration role's password |
 | `EXERIS_MIGRATE_SERVICE_ROLE` | no | the service role `migrate` grants access to; lowercase letters, digits and underscores, starting with a letter or underscore, at most 63 characters |
@@ -76,6 +76,17 @@ Identity settings, for `serve` and `bootstrap-owner`. Durations are ISO-8601, su
 | `EXERIS_PASSWORD_ARGON2_PARALLELISM` | no | Argon2id lanes, 1; 1 to 64 |
 
 The five rate-limit groups are `LOGIN` (login and `/mfa/verify`), `REFRESH`, `PASSWORD_RESET`, `VERIFICATION` and `INVITATION_ACCEPT`. The lockout and credential-token settings are in seconds, up to 3650 days.
+
+## The JDBC URL rule
+
+The launcher parses the database URL itself and calls the PostgreSQL driver only with a URL that has this form, because the driver writes a URL it cannot parse to the log, quoting part of it, before it fails.
+
+- The scheme is `jdbc:postgresql://`.
+- The authority holds one or more hosts separated by commas. A host is a name, an IPv4 address or an IPv6 address in brackets, with an optional port from 1 to 65535. **It holds no user-info: an `@` anywhere in the authority is a refusal.** Credentials go in the user and password settings.
+- A database name follows the first `/`: letters, digits and `. _ ~ -`, with well-formed percent-escapes. A URL without one is refused, and so is a fragment (`#`).
+- A query is optional. Every parameter has a plain name and a well-formed value. A parameter named `user`, `password` or `sslpassword`, or any name that contains `password`, `passwd`, `pwd` or `passphrase` in any case or percent-escaped spelling, is refused: a credential in the URL's query would be printed by any message that quotes the URL.
+
+A URL that does not start with `jdbc:postgresql:` is a configuration problem (status 78) found while the settings are read. A URL that starts with it and does not have the form above is refused when the connection is opened: `serve` and `bootstrap-owner` end with status 69, `migrate` with status 1, all with SQLSTATE 08001 and a message that names no part of the URL.
 
 ## Keyrings and pepper
 
