@@ -40,7 +40,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * logged before {@link #learn} returns can only be redacted with the secrets known when it was published,
  * so {@link #learn} is called before the value it names is used for anything.
  *
- * <p>The wrapper never throws and never calls itself: a record published while the same thread is already
+ * <p>The logging path of the wrapper ({@code publish}, {@code flush}, {@code close}, {@code isLoggable}) never
+ * throws and never calls itself: a record published while the same thread is already
  * inside the wrapper (a handler that logs from {@code publish}) is dropped, and any failure while rewriting
  * a record publishes a record that says only that it was withheld.
  */
@@ -220,12 +221,75 @@ final class ForeignLogs {
 
         @Override
         public void close() {
-            wrapped.close();
+            try {
+                wrapped.close();
+            } catch (RuntimeException ignored) { // NOPMD - the wrapper never throws
+                // nothing to report
+            }
         }
 
         @Override
         public boolean isLoggable(java.util.logging.LogRecord record) {
-            return wrapped.isLoggable(record);
+            try {
+                return wrapped.isLoggable(record);
+            } catch (RuntimeException ignored) { // NOPMD - the wrapper never throws
+                return false;
+            }
+        }
+
+        // The configuration of the wrapper is the configuration of the wrapped handler: a level, filter,
+        // formatter, encoding or error manager set on the handler a logger shows takes effect on the handler
+        // that writes. The setters and getters report what the wrapped handler reports, including its refusal
+        // of an argument; they are configuration calls, not part of the logging path.
+
+        @Override
+        public void setLevel(java.util.logging.Level level) {
+            wrapped.setLevel(level);
+        }
+
+        @Override
+        public java.util.logging.Level getLevel() {
+            return wrapped.getLevel();
+        }
+
+        @Override
+        public void setFilter(java.util.logging.Filter filter) {
+            wrapped.setFilter(filter);
+        }
+
+        @Override
+        public java.util.logging.Filter getFilter() {
+            return wrapped.getFilter();
+        }
+
+        @Override
+        public void setFormatter(java.util.logging.Formatter formatter) {
+            wrapped.setFormatter(formatter);
+        }
+
+        @Override
+        public java.util.logging.Formatter getFormatter() {
+            return wrapped.getFormatter();
+        }
+
+        @Override
+        public void setEncoding(String encoding) throws java.io.UnsupportedEncodingException {
+            wrapped.setEncoding(encoding);
+        }
+
+        @Override
+        public String getEncoding() {
+            return wrapped.getEncoding();
+        }
+
+        @Override
+        public void setErrorManager(java.util.logging.ErrorManager manager) {
+            wrapped.setErrorManager(manager);
+        }
+
+        @Override
+        public java.util.logging.ErrorManager getErrorManager() {
+            return wrapped.getErrorManager();
         }
     }
 }
