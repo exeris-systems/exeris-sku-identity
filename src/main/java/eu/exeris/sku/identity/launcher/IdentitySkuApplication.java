@@ -114,6 +114,11 @@ public final class IdentitySkuApplication {
         Runtime.getRuntime().halt(EXIT_NOT_COMPLETED);
     }
 
+    /** The migration password and the service password, whichever are configured and readable. */
+    private static String[] secrets(Map<String, String> environment) {
+        return LauncherLog.secrets(environment, Migrate.DATABASE_PREFIX, StartupPlan.DATABASE_PREFIX);
+    }
+
     /** Applies the schema; returns the process exit status. */
     static int migrate(Map<String, String> environment) {
         try {
@@ -123,10 +128,12 @@ public final class IdentitySkuApplication {
                     : "Applied " + applied.size() + " migration(s): " + applied);
             return 0;
         } catch (IdentityConfigException e) {
-            LOG.log(System.Logger.Level.ERROR, "Migration configuration refused: {0}", e.getMessage());
+            LauncherLog.log(LOG, System.Logger.Level.ERROR, "Migration configuration refused: {0}",
+                    secrets(environment), e.getMessage());
             return EXIT_CONFIG;
         } catch (SQLException e) {
-            LOG.log(System.Logger.Level.ERROR, "Migration failed, SQLSTATE {0}: {1}", e.getSQLState(), e.getMessage());
+            LauncherLog.log(LOG, System.Logger.Level.ERROR, "Migration failed, SQLSTATE {0}: {1}",
+                    secrets(environment), e.getSQLState(), e.getMessage());
             return EXIT_MIGRATION_FAILED;
         }
     }
@@ -185,11 +192,13 @@ public final class IdentitySkuApplication {
             requireSameEnvironment(plan);
             ServiceRoleCheck.verify(plan.database());
         } catch (IdentityConfigException e) {
-            LOG.log(System.Logger.Level.ERROR, "Identity configuration refused, not starting: {0}", e.getMessage());
+            LauncherLog.log(LOG, System.Logger.Level.ERROR, "Identity configuration refused, not starting: {0}",
+                    LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX), e.getMessage());
             return EXIT_CONFIG;
         } catch (SQLException e) {
-            LOG.log(System.Logger.Level.ERROR, "The database cannot be reached, not starting (SQLSTATE {0})",
-                    e.getSQLState());
+            LauncherLog.log(LOG, System.Logger.Level.ERROR,
+                    "The database cannot be reached, not starting (SQLSTATE {0})",
+                    LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX), e.getSQLState());
             return EXIT_UNAVAILABLE;
         }
         if (interrupted()) {
@@ -277,8 +286,8 @@ public final class IdentitySkuApplication {
             // The licence refusal is a runtime exception, not a BootstrapException. The kernel's message
             // names the gate's code and text; a driver's message may quote the connection URL, so the
             // credentials in it are withheld.
-            LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was started: {0}",
-                    LogRedaction.of(e.getMessage(), plan.database().password()));
+            LauncherLog.log(LOG, System.Logger.Level.ERROR, "The kernel did not boot, nothing was started: {0}",
+                    LauncherLog.secrets(plan.database()), e.getMessage());
             return Ending.KERNEL_NOT_BOOTED;
         } catch (Error e) {
             // A class that cannot be loaded or initialised at start is a start that did not complete.

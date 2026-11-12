@@ -72,12 +72,16 @@ final class BootstrapOwnerCommand {
                 }
                 ServiceRoleCheck.verify(plan.database());
             } catch (IdentityConfigException e) {
-                LOG.log(System.Logger.Level.ERROR, "Owner bootstrap refused, nothing changed: {0}", e.getMessage());
+                LauncherLog.log(LOG, System.Logger.Level.ERROR, "Owner bootstrap refused, nothing changed: {0}",
+                        LauncherLog.with(LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX), password),
+                        e.getMessage());
                 return IdentitySkuApplication.EXIT_CONFIG;
             }
             return provision(plan, settings, password);
         } catch (SQLException e) {
-            LOG.log(System.Logger.Level.ERROR, "The database cannot be reached, nothing changed (SQLSTATE {0})",
+            LauncherLog.log(LOG, System.Logger.Level.ERROR,
+                    "The database cannot be reached, nothing changed (SQLSTATE {0})",
+                    LauncherLog.with(LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX), password),
                     e.getSQLState());
             return IdentitySkuApplication.EXIT_UNAVAILABLE;
         } finally {
@@ -105,8 +109,8 @@ final class BootstrapOwnerCommand {
                     });
         } catch (KernelBootstrap.BootstrapException | RuntimeException e) {
             // The kernel's licence refusal is a runtime exception, not a BootstrapException.
-            LOG.log(System.Logger.Level.ERROR, "The kernel did not boot, nothing was created: {0}",
-                    LogRedaction.of(e.getMessage(), plan.database().password()));
+            LauncherLog.log(LOG, System.Logger.Level.ERROR, "The kernel did not boot, nothing was created: {0}",
+                    LauncherLog.with(LauncherLog.secrets(plan.database()), password), e.getMessage());
             return IdentitySkuApplication.EXIT_NOT_COMPLETED;
         }
         if (result.failure != null) {
