@@ -99,7 +99,7 @@ class IdentityCompositionTest {
     @DisplayName("a service boundary that is not strict is refused")
     void nonStrictBoundaryIsRefused() {
         IdentityComposition.Builder builder = builder()
-                .serviceBoundary(ServiceBoundaryCoreModule.builder().build());
+                .serviceBoundary(ServiceBoundaryCoreModule.builder().strictRoutes(false).build());
 
         assertThatThrownBy(builder::build)
                 .isInstanceOf(IllegalArgumentException.class)
