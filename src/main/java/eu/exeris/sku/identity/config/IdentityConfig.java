@@ -593,7 +593,7 @@ public record IdentityConfig(
             try {
                 parsed = Long.parseLong(value.trim());
             } catch (NumberFormatException e) {
-                problem(key + " must be a whole number, not '" + value + "'");
+                problem(key + " must be a whole number");
                 return fallback;
             }
             if (parsed < min || parsed > max) {
@@ -620,7 +620,7 @@ public record IdentityConfig(
                 }
                 return parsed;
             } catch (DateTimeParseException e) {
-                problem(key + " must be an ISO-8601 duration such as PT5M, not '" + value + "'");
+                problem(key + " must be an ISO-8601 duration such as PT5M");
                 return fallback;
             }
         }
@@ -641,7 +641,9 @@ public record IdentityConfig(
         /** Browser origins: {@code scheme://host[:port]} with an http or https scheme, no path, never a wildcard. */
         List<String> origins(String key) {
             List<String> origins = new ArrayList<>();
+            int position = 0;
             for (String origin : list(key)) {
+                position++;
                 if (origin.equals("*")) {
                     problem(key + " must list origins; a wildcard is refused");
                     continue;
@@ -650,14 +652,14 @@ public record IdentityConfig(
                 try {
                     uri = new URI(origin);
                 } catch (URISyntaxException e) {
-                    problem(key + ": '" + origin + "' is not a URI");
+                    problem(key + ": entry " + position + " is not a URI");
                     continue;
                 }
                 String scheme = uri.getScheme();
                 boolean plain = uri.getHost() != null && uri.getUserInfo() == null && uri.getQuery() == null
                         && uri.getFragment() == null && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
                 if (!plain || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
-                    problem(key + ": '" + origin + "' is not an origin (http:// or https://, host and optional "
+                    problem(key + ": entry " + position + " is not an origin (http:// or https://, host and optional "
                             + "port, nothing else)");
                     continue;
                 }
