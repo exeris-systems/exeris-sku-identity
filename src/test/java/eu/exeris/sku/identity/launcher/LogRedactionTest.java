@@ -280,4 +280,64 @@ class LogRedactionTest {
                     .isLessThan(Duration.ofSeconds(1));
         }
     }
+
+    // --- a placeholder already in the text ------------------------------------------------------------
+
+    private static final String U = "(message withheld)";
+
+    @Test
+    @DisplayName("A secret that occurs both inside a placeholder and outside it is withheld outside, and the placeholder is intact")
+    void secretInsideAndOutsideAPlaceholder() {
+        assertThat(LogRedaction.of("p " + W + " q held r", "held")).isEqualTo("p " + W + " q " + W + " r");
+        assertThat(LogRedaction.of("held " + W + " held", "held")).isEqualTo(W + " " + W + " " + W);
+        assertThat(LogRedaction.of(U + " then held", "held")).isEqualTo(U + " then " + W);
+        assertThat(LogRedaction.of("held " + U, "held")).isEqualTo(W + " " + U);
+        assertThat(LogRedaction.of("with" + W + "held", "held")).isEqualTo("with" + W + W);
+        for (String piece : List.of("held", "withheld", "<with", "hel", "ithh", "eld>", "<withheld", "ithheld>")) {
+            String secret = random();
+            String text = "a " + W + " b " + secret + " c " + W + " d";
+            String safe = LogRedaction.of(text, piece, secret);
+
+            assertThat(safe).as(piece).doesNotContain(secret).contains("a " + W + " b ").contains(" c " + W + " d")
+                    .doesNotContain(W + W + W + W);
+        }
+    }
+
+    @Test
+    @DisplayName("An input that is exactly '(message withheld)' or '<withheld>' stays so, whatever piece of it is a secret")
+    void aPlaceholderAloneStaysSo() {
+        for (String input : List.of(U, W)) {
+            for (String secret : List.of("held", "withheld", "message", "(mes", "age w", "<with", "eld>", "ith",
+                    "hel", input, input.substring(1), input.substring(0, input.length() - 1))) {
+                assertThat(LogRedaction.of(input, secret)).as(input + " with the secret " + secret).isEqualTo(input);
+            }
+            assertThat(LogRedaction.of(input, "held", "withheld", "message")).isEqualTo(input);
+        }
+    }
+
+    @Test
+    @DisplayName("An occurrence that reaches out of a placeholder is withheld outside it; the part inside stays as written")
+    void anOccurrenceReachingOutOfAPlaceholder() {
+        String tail = random();
+        String secret = "held>" + tail;
+        String safe = LogRedaction.of("a " + W + tail + " b", secret);
+
+        assertThat(safe).doesNotContain(tail).isEqualTo("a " + W + W + " b");
+
+        String head = random();
+        String leading = head + "<with";
+        assertThat(LogRedaction.of("a " + head + W + " b", leading)).doesNotContain(head)
+                .isEqualTo("a " + W + W + " b");
+    }
+
+    @Test
+    @DisplayName("A secret equal to the whole placeholder: the placeholder in the input is not an occurrence, its percent-encoded and Base64 forms are")
+    void aSecretEqualToThePlaceholder() {
+        assertThat(LogRedaction.of("x " + W + " y", W)).isEqualTo("x " + W + " y");
+        assertThat(LogRedaction.of("x " + W + W + " y", W)).isEqualTo("x " + W + W + " y");
+        assertThat(LogRedaction.of("x %3Cwithheld%3E y", W)).isEqualTo("x " + W + " y");
+        String base64 = java.util.Base64.getEncoder().encodeToString(W.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(LogRedaction.of("x " + base64 + " y", W)).doesNotContain(base64).isEqualTo("x " + W + " y");
+        assertThat(LogRedaction.of("x " + U + " y", U)).isEqualTo("x " + U + " y");
+    }
 }

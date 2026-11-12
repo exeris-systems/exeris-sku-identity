@@ -236,6 +236,133 @@ class ForeignLogsTest {
         assertThat(capture.records).extracting(LogRecord::getLevel).containsExactly(Level.WARNING);
     }
 
+    // --- the configuration of the visible handler is the configuration of the writing one ---------------
+
+    /** The wrapper a logger shows in place of the handler that writes. */
+    private static ForeignLogs.Redacting visibleWrapper() {
+        for (Handler handler : Logger.getLogger("").getHandlers()) {
+            if (handler instanceof ForeignLogs.Redacting wrapper) {
+                return wrapper;
+            }
+        }
+        throw new AssertionError("no wrapper on the root logger");
+    }
+
+    @Test
+    @DisplayName("A level set on the visible handler after the command began takes effect on the handler that writes")
+    void levelSetOnTheWrapperReachesTheWrappedHandler() {
+        ForeignLogs.begin(secret());
+        Logger logger = logger("third.party.level.forwarded");
+        ForeignLogs.Redacting wrapper = visibleWrapper();
+
+        wrapper.setLevel(Level.WARNING);
+        logger.log(Level.INFO, "below");
+        logger.log(Level.FINE, "far below");
+        logger.log(Level.WARNING, "at");
+        logger.log(Level.SEVERE, "above");
+
+        assertThat(capture.messages()).containsExactly("at", "above");
+        assertThat(wrapper.getLevel()).isEqualTo(Level.WARNING);
+        assertThat(capture.getLevel()).isEqualTo(Level.WARNING);
+
+        wrapper.setLevel(Level.OFF);
+        logger.log(Level.SEVERE, "nothing");
+        assertThat(capture.messages()).containsExactly("at", "above");
+
+        wrapper.setLevel(Level.ALL);
+        logger.log(Level.FINEST, "everything");
+        assertThat(capture.messages()).containsExactly("at", "above", "everything");
+    }
+
+    @Test
+    @DisplayName("A filter and a formatter set on the visible handler are the filter and the formatter of the handler that writes")
+    void filterAndFormatterAreForwarded() {
+        ForeignLogs.begin(secret());
+        Logger logger = logger("third.party.filter.forwarded");
+        ForeignLogs.Redacting wrapper = visibleWrapper();
+        Filter onlyErrors = record -> record.getLevel() == Level.SEVERE;
+        SimpleFormatter formatter = new SimpleFormatter();
+
+        wrapper.setFilter(onlyErrors);
+        wrapper.setFormatter(formatter);
+        logger.log(Level.WARNING, "dropped");
+        logger.log(Level.SEVERE, "kept");
+
+        assertThat(capture.messages()).containsExactly("kept");
+        assertThat(capture.getFilter()).isSameAs(onlyErrors);
+        assertThat(wrapper.getFilter()).isSameAs(onlyErrors);
+        assertThat(capture.getFormatter()).isSameAs(formatter);
+        assertThat(wrapper.getFormatter()).isSameAs(formatter);
+
+        wrapper.setFilter(null);
+        logger.log(Level.WARNING, "now kept");
+        assertThat(capture.messages()).containsExactly("kept", "now kept");
+    }
+
+    @Test
+    @DisplayName("The encoding and the error manager set on the visible handler are those of the handler that writes; its refusal of an encoding is reported")
+    void encodingAndErrorManagerAreForwarded() throws Exception {
+        ForeignLogs.begin(secret());
+        ForeignLogs.Redacting wrapper = visibleWrapper();
+        java.util.logging.ErrorManager manager = new java.util.logging.ErrorManager();
+
+        wrapper.setEncoding("UTF-8");
+        wrapper.setErrorManager(manager);
+
+        assertThat(capture.getEncoding()).isEqualTo("UTF-8");
+        assertThat(wrapper.getEncoding()).isEqualTo("UTF-8");
+        assertThat(capture.getErrorManager()).isSameAs(manager);
+        assertThat(wrapper.getErrorManager()).isSameAs(manager);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> wrapper.setEncoding("no-such-encoding"))
+                .isInstanceOf(java.io.UnsupportedEncodingException.class);
+    }
+
+    /** A handler whose every method of the logging path fails. */
+    private static final class Failing extends Handler {
+        final AtomicInteger closeCalls = new AtomicInteger();
+
+        @Override
+        public void publish(LogRecord record) {
+            throw new IllegalStateException("publish failed");
+        }
+
+        @Override
+        public void flush() {
+            throw new IllegalStateException("flush failed");
+        }
+
+        @Override
+        public void close() {
+            closeCalls.incrementAndGet();
+            throw new IllegalStateException("close failed");
+        }
+
+        @Override
+        public boolean isLoggable(LogRecord record) {
+            throw new IllegalStateException("isLoggable failed");
+        }
+    }
+
+    @Test
+    @DisplayName("A wrapped handler whose isLoggable, close, flush or publish throws never makes the wrapper throw")
+    void wrapperNeverThrowsFromTheLoggingPath() {
+        Failing failing = new Failing();
+        state.replaceRootHandlers(failing);
+        ForeignLogs.begin(secret());
+        ForeignLogs.Redacting wrapper = visibleWrapper();
+        LogRecord record = new LogRecord(Level.SEVERE, "m");
+        Logger logger = logger("third.party.failing");
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> {
+            assertThat(wrapper.isLoggable(record)).as("a handler that cannot say is not asked to write").isFalse();
+            wrapper.flush();
+            wrapper.publish(record);
+            logger.log(Level.SEVERE, "through the logger");
+            wrapper.close();
+        }).doesNotThrowAnyException();
+        assertThat(failing.closeCalls).hasValue(1);
+    }
+
     // --- what the message can be -----------------------------------------------------------------------
 
     private static final class ThrowingToString {
