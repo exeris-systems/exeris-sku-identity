@@ -185,6 +185,9 @@ final class ServiceStop {
         }
     }
 
+    // The flag is restored after the wait, not inside the loop: a set flag would make every further
+    // await throw at once, and the wait must last until the stop has completed.
+    @SuppressWarnings("java:S2142")
     private void awaitStopped() {
         boolean interrupted = false;
         while (true) {

@@ -338,6 +338,7 @@ public final class IdentityComposition {
             try {
                 Thread.sleep(remaining);
             } catch (InterruptedException cancelled) {
+                Thread.currentThread().interrupt();
                 return;
             }
             synchronized (gate) {
