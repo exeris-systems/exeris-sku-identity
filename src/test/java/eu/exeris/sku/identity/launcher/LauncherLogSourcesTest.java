@@ -71,6 +71,17 @@ class LauncherLogSourcesTest {
     private static final Pattern OTHER_FRAMEWORK = Pattern.compile(
             "import\\s+(?:java\\.util\\.logging|org\\.slf4j|org\\.apache\\.logging|org\\.jboss\\.logging|"
                     + "ch\\.qos\\.logback)\\b");
+    private static final Pattern IMPORTED_JUL = Pattern.compile("import\\s+(?:static\\s+)?java\\.util\\.logging\\b");
+    private static final Pattern QUALIFIED_JUL = Pattern.compile("\\bjava\\s*\\.\\s*util\\s*\\.\\s*logging\\s*\\.");
+
+    /**
+     * The only classes that may name {@code java.util.logging}, by import or by qualified name, and call the
+     * redaction. {@code ForeignLogs} rewrites the records of the JVM's logging framework; {@code LauncherLog}
+     * is the one route to the redaction.
+     */
+    private static final Set<String> LOGGING_OWNERS = Set.of(
+            "eu/exeris/sku/identity/launcher/ForeignLogs.java",
+            "eu/exeris/sku/identity/launcher/LauncherLog.java");
 
     // --- the scan --------------------------------------------------------------------------------------
 
@@ -157,6 +168,10 @@ class LauncherLogSourcesTest {
     }
 
     private static Scan scan(Path root) throws IOException {
+        return scan(root, LOGGING_OWNERS);
+    }
+
+    private static Scan scan(Path root, Set<String> loggingOwners) throws IOException {
         List<Finding> findings = new ArrayList<>();
         int direct = 0;
         int helper = 0;
@@ -175,10 +190,20 @@ class LauncherLogSourcesTest {
                     throwables.add(m.group(1));
                 }
             }
+            boolean owner = loggingOwners.contains(name);
             Matcher framework = OTHER_FRAMEWORK.matcher(masked);
             while (framework.find()) {
+                if (owner && IMPORTED_JUL.matcher(framework.group()).find()) {
+                    continue;
+                }
                 findings.add(new Finding(name, lineOf(source, framework.start()), "another logging framework",
                         compact(source.substring(framework.start(), framework.end()))));
+            }
+            Matcher qualified = QUALIFIED_JUL.matcher(masked);
+            while (qualified.find() && !owner) {
+                findings.add(new Finding(name, lineOf(source, qualified.start()),
+                        "java.util.logging outside the classes allowed to use it",
+                        compact(source.substring(qualified.start(), Math.min(source.length(), qualified.end() + 30)))));
             }
             Matcher stack = PRINT_STACK.matcher(masked);
             while (stack.find()) {
@@ -294,18 +319,27 @@ class LauncherLogSourcesTest {
     }
 
     @Test
-    @DisplayName("LauncherLog is the only caller of the redaction")
-    void helperIsTheOnlyRoute() throws IOException {
-        List<String> callers = new ArrayList<>();
+    @DisplayName("Only ForeignLogs and LauncherLog name java.util.logging or call the redaction, and both still do")
+    void loggingOwnersAreTheTwoClasses() throws IOException {
+        List<String> redactionCallers = new ArrayList<>();
+        List<String> julUsers = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(MAIN)) {
             for (Path file : walk.filter(f -> f.toString().endsWith(".java")).sorted().toList()) {
-                if (mask(Files.readString(file)).contains("LogRedaction.of(")) {
-                    callers.add(file.getFileName().toString());
+                String masked = mask(Files.readString(file));
+                String name = MAIN.relativize(file).toString().replace('\\', '/');
+                if (masked.contains("LogRedaction.of(")) {
+                    redactionCallers.add(name);
+                }
+                if (IMPORTED_JUL.matcher(masked).find() || QUALIFIED_JUL.matcher(masked).find()) {
+                    julUsers.add(name);
                 }
             }
         }
 
-        assertThat(callers).containsExactly("LauncherLog.java");
+        assertThat(redactionCallers).as("callers of the redaction").isSubsetOf(LOGGING_OWNERS)
+                .contains("eu/exeris/sku/identity/launcher/LauncherLog.java");
+        assertThat(julUsers).as("classes that name java.util.logging").isSubsetOf(LOGGING_OWNERS)
+                .contains("eu/exeris/sku/identity/launcher/ForeignLogs.java");
     }
 
     // --- controls: the scan can fail -------------------------------------------------------------------
@@ -404,5 +438,45 @@ class LauncherLogSourcesTest {
         assertThat(scan.directLogCalls()).isEqualTo(2);
         assertThat(scan.helperCalls()).isEqualTo(1);
         assertThat(scan.files()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("A fully qualified use of java.util.logging is caught anywhere but in the two allowed classes, and an import is caught too")
+    void reportsQualifiedLoggingOutsideTheOwners(@TempDir Path dir) throws IOException {
+        List<String> bodies = List.of(
+                "java.util.logging.Logger l = java.util.logging.Logger.getLogger(\"n\");",
+                "Object o = java.util.logging.Level.INFO;",
+                "Object o = java . util . logging . LogManager.getLogManager();",
+                "Object o = java.util.\n logging.Level.INFO;");
+        for (String body : bodies) {
+            Path sub = Files.createDirectories(dir.resolve("t" + bodies.indexOf(body)));
+            assertThat(violationsOf(sub, body)).as(body).extracting(Finding::rule)
+                    .contains("java.util.logging outside the classes allowed to use it");
+        }
+    }
+
+    @Test
+    @DisplayName("The allowed classes may name java.util.logging, but not another framework, and the allow-list is by path")
+    void allowedClassesMayUseJulOnly(@TempDir Path dir) throws IOException {
+        Path owner = Files.createDirectories(dir.resolve("eu/exeris/sku/identity/launcher"));
+        Files.writeString(owner.resolve("ForeignLogs.java"), "import java.util.logging.Logger;\nclass ForeignLogs {\n"
+                + " Object o = java.util.logging.Level.INFO;\n}\n");
+        assertThat(scan(dir, LOGGING_OWNERS).findings()).isEmpty();
+
+        Files.writeString(owner.resolve("ForeignLogs.java"), "import org.slf4j.Logger;\nclass ForeignLogs { }\n");
+        assertThat(scan(dir, LOGGING_OWNERS).findings()).extracting(Finding::rule)
+                .containsExactly("another logging framework");
+
+        Path elsewhere = Files.createDirectories(dir.resolve("eu/exeris/sku/identity/http"));
+        Files.writeString(elsewhere.resolve("ForeignLogs.java"), "class ForeignLogs { Object o = java.util.logging.Level.INFO; }\n");
+        assertThat(scan(dir, LOGGING_OWNERS).findings()).extracting(Finding::file)
+                .contains("eu/exeris/sku/identity/http/ForeignLogs.java");
+    }
+
+    @Test
+    @DisplayName("A mention of java.util.logging in a comment or a string is not a use")
+    void commentsAndLiteralsAreNotUses(@TempDir Path dir) throws IOException {
+        assertThat(violationsOf(dir, "// java.util.logging.Logger\nString s = \"java.util.logging.Logger\";\n"
+                + "/* java.util.logging.Level */ int unused = 0;")).isEmpty();
     }
 }
