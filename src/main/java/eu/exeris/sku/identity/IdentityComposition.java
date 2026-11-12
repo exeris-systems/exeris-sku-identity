@@ -284,11 +284,9 @@ public final class IdentityComposition {
      *
      * <p>A drain runs on the calling thread, which keeps the bindings the thread carries, and a watchdog
      * interrupts that thread at the deadline. The interrupt flag the thread had on entry is what it has on
-     * return: an interrupt the watchdog delivered is cleared and never reaches the next drain or any
-     * terminate, and a flag the thread entered with is set again however the drain ended, including when
-     * the drain consumed it by throwing {@link InterruptedException}. The flag is cleared on the way out only
-     * when the watchdog fired, and the watchdog cannot interrupt once the drain has ended; an interrupt from
-     * any other source that arrives while the drain runs and is not consumed by it stays set.
+     * return, and an interrupt the watchdog delivered never reaches the next drain or any terminate; an
+     * interrupt of another source is not cleared, except where it cannot be told from the watchdog's, as
+     * {@link #drainWithin} states.
      *
      * @return the first {@link Error} a drain threw, with the later ones suppressed; {@code null} when
      *         there was none. An {@link Exception} is logged and goes no further.
@@ -325,15 +323,38 @@ public final class IdentityComposition {
      * Runs one drain on the calling thread with a watchdog that interrupts the thread when {@code remaining}
      * has passed.
      *
+     * <p>The watchdog interrupts under a gate in which it also records whether the thread's flag was already
+     * set; the end of the drain closes the same gate, so the watchdog cannot fire after the drain has ended
+     * and the two records below are taken at one instant. At that instant the drain has <em>consumed</em>
+     * an interrupt when it threw {@link InterruptedException} or an exception with one in its cause chain, or
+     * when it returned with the flag clear. The flag on return is then:
+     * <ul>
+     * <li>the watchdog did not fire: the flag is untouched, so an interrupt from any other source stays set;
+     * <li>the watchdog fired and the flag was already set just before it did: a pending interrupt of another
+     *     source coalesced with the watchdog's and is kept, set, whatever the drain did with the flag
+     *     afterwards;
+     * <li>the watchdog fired, no flag was pending, and the drain consumed an interrupt: the watchdog's
+     *     interrupt is gone, so a flag that is set again belongs to another source and is kept;
+     * <li>the watchdog fired, no flag was pending, and the drain did not consume an interrupt: the flag is
+     *     the watchdog's and is cleared, so that it reaches neither the next drain nor a terminate.
+     * </ul>
+     * The flag the thread entered with is always set again on return.
+     *
+     * <p>The last case cannot tell the watchdog's interrupt from one of another source that arrived after the
+     * watchdog fired and before the drain ended, because both are the same set flag, and so does the same
+     * for a drain that consumed the single coalesced interrupt. The flag is cleared there: the case is that of
+     * every drain that does not poll the flag, and leaving the watchdog's interrupt set would put it into
+     * every terminate that follows an overrun, where blocking calls fail on it. The loss is confined to an
+     * interrupt that lands inside the overrun of a drain that is already abandoned.
+     *
      * @return {@code false} when the watchdog interrupted the drain; {@code true} otherwise
-     * @throws Exception what the drain threw, unless it was the {@link InterruptedException} of the watchdog
+     * @throws Exception what the drain threw, unless the watchdog had fired when it threw the
+     *         {@link InterruptedException}
      */
     private static boolean drainWithin(CapabilityLifecycleHooks module, Duration remaining) throws Exception {
         Thread caller = Thread.currentThread();
         boolean flagOnEntry = caller.isInterrupted();
-        Object gate = new Object();
-        boolean[] over = {false};
-        boolean[] fired = {false};
+        WatchdogGate gate = new WatchdogGate();
         Thread watchdog = new Thread(() -> {
             try {
                 Thread.sleep(remaining);
@@ -341,36 +362,77 @@ public final class IdentityComposition {
                 Thread.currentThread().interrupt();
                 return;
             }
-            synchronized (gate) {
-                if (!over[0]) {
-                    fired[0] = true;
-                    caller.interrupt();
-                }
-            }
+            gate.fire(caller);
         }, "identity-drain-watchdog");
         watchdog.setDaemon(true);
         watchdog.start();
+        DrainEnd end = null;
+        boolean consumed = false;
         try {
             module.drain(remaining);
+            end = gate.close(caller);
+            consumed = !end.flagAtEnd();
         } catch (InterruptedException interrupted) {
-            synchronized (gate) {
-                if (!fired[0]) {
-                    throw interrupted;
-                }
+            end = gate.close(caller);
+            consumed = true;
+            if (!end.fired()) {
+                throw interrupted;
             }
+        } catch (Exception | Error thrown) {
+            end = gate.close(caller);
+            consumed = !end.flagAtEnd() || carriesInterrupt(thrown);
+            throw thrown;
         } finally {
-            synchronized (gate) {
-                over[0] = true;
+            if (end == null) {
+                end = gate.close(caller);
             }
             watchdog.interrupt();
-            if (fired[0]) {
-                Thread.interrupted();
+            if (end.fired()) {
+                if (end.flagBeforeFire()) {
+                    caller.interrupt();
+                } else if (!consumed) {
+                    Thread.interrupted();
+                }
             }
             if (flagOnEntry) {
                 caller.interrupt();
             }
         }
-        return !fired[0];
+        return !end.fired();
+    }
+
+    private static boolean carriesInterrupt(Throwable thrown) {
+        int depth = 0;
+        for (Throwable t = thrown; t != null && depth < 32; t = t.getCause(), depth++) {
+            if (t instanceof InterruptedException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** What the gate recorded at the end of a drain. */
+    private record DrainEnd(boolean fired, boolean flagBeforeFire, boolean flagAtEnd) {
+    }
+
+    /** The point at which the watchdog fires or the drain ends, whichever comes first; the other then does nothing. */
+    private static final class WatchdogGate {
+        private boolean over;
+        private boolean fired;
+        private boolean flagBeforeFire;
+
+        synchronized void fire(Thread caller) {
+            if (!over) {
+                flagBeforeFire = caller.isInterrupted();
+                fired = true;
+                caller.interrupt();
+            }
+        }
+
+        synchronized DrainEnd close(Thread caller) {
+            over = true;
+            return new DrainEnd(fired, flagBeforeFire, caller.isInterrupted());
+        }
     }
 
     private static long nanos(Duration budget) {
