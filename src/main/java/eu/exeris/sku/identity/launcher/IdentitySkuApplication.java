@@ -295,7 +295,7 @@ public final class IdentitySkuApplication {
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Exception e) {
-            if (!outcome.flagMayBeDeferred && causedByInterrupt(e)) {
+            if (isStopRequest(e, outcome.flagMayBeDeferred, interrupted())) {
                 LOG.log(System.Logger.Level.INFO, "Asked to stop while the kernel booted, nothing was started");
                 return Ending.STOPPED;
             }
@@ -389,7 +389,7 @@ public final class IdentitySkuApplication {
                         throw fatal;
                     } catch (Exception | Error e) {
                         // A refusal of the interrupt by a step that waits is a stop, not a failure.
-                        if (outcome.flagMayBeDeferred || !causedByInterrupt(e)) {
+                        if (!isStopRequest(e, outcome.flagMayBeDeferred, interrupted())) {
                             outcome.failure = e;
                         }
                     } finally {
@@ -420,7 +420,22 @@ public final class IdentitySkuApplication {
      * such a cause, or one after which the flag was cleared, is not recognised and stays a failure.
      */
     static boolean causedByInterrupt(Throwable failure) {
-        if (!interrupted()) {
+        return isStopRequest(failure, false, interrupted());
+    }
+
+    /**
+     * Classifies a failure: whether it is a stop requested by an interrupt and not a failure of the service.
+     * It is a stop only when the interrupt flag is set, the flag is not possibly the composition's own
+     * deferred one, and the failure has an interrupt-typed cause, as {@link #causedByInterrupt} describes.
+     *
+     * @param failure the failure to classify
+     * @param flagMayBeDeferred whether the flag was clear when a stop or a start's unwind that may overrun a
+     *        drain began, so that a flag set now may be the composition's own and not a request to stop
+     * @param flagSet whether the launcher thread's interrupt flag is set
+     * @return {@code true} when the failure is a stop; {@code false} when it is a failure of the service
+     */
+    static boolean isStopRequest(Throwable failure, boolean flagMayBeDeferred, boolean flagSet) {
+        if (flagMayBeDeferred || !flagSet) {
             return false;
         }
         Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
