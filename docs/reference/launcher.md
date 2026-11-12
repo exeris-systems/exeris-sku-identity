@@ -4,7 +4,7 @@ type: reference
 visibility: public
 owning-repo: exeris-sku-identity
 status: active
-last-verified: 2026-11-11
+last-verified: 2026-11-12
 ---
 
 # Launcher reference
@@ -17,7 +17,7 @@ The standalone launcher is `eu.exeris.sku.identity.launcher.IdentitySkuApplicati
 
 The jar's manifest names the launcher as its main class and `lib/` as its class path, so no `-cp` is needed while `target/lib/` stays beside it. With no argument the launcher serves, and a second argument is a usage error (status 64). `--enable-native-access=ALL-UNNAMED` is the flag the container image passes, because the kernel's off-heap memory needs native access; further JVM options are the operator's (the image reads them from `JAVA_OPTS`). The configuration is checked before the kernel starts, so a variable that is missing ends the process with status 78 and a list of every problem.
 
-- **`migrate`** reads only the `EXERIS_MIGRATE_*` settings, never boots the kernel and needs no licence manifest.
+- **`migrate`** reads only the `EXERIS_MIGRATE_*` settings (and the service password, only to withhold it from its log), never boots the kernel and needs no licence manifest.
 - **`bootstrap-owner`** boots the kernel's persistence and scheduling, and so needs the licence manifest (`EXERIS_LICENSE_MANIFEST_PATH`).
 - **`serve`** boots the kernel and needs the licence manifest.
 
@@ -39,23 +39,30 @@ No ending of `serve` is an uncaught exception. A supervisor should treat 0 and 1
 
 ### Stopping `serve`
 
-On SIGTERM the service stops answering (requests get 503), drains in-flight work within one budget of 15 s shared by all the capabilities (a drain that overruns it is interrupted and abandoned, and the later capabilities are still stopped), stops its capabilities once, and then the kernel stops its subsystems. The drain is interrupted, not killed: a capability whose drain ignores the interrupt holds the stop until the drain returns, and its `terminate` is never called while the drain runs. After a termination signal the process then stays up until the supervisor kills it, and the overrun warning is logged only when the drain returns. A drain or a terminate that throws is logged by the class of the capability and of the exception only, without the exception's message or stack. A service that no client has kept a connection to stops in under a second.
+On SIGTERM the service stops answering (requests get 503), drains in-flight work within one budget of 15 s shared by all the capabilities (a drain that overruns it is interrupted and abandoned, and the later capabilities are still stopped), stops its capabilities once, and then the kernel stops its subsystems. The drain is interrupted, not killed: a capability whose drain ignores the interrupt holds the stop until the drain returns, and its `terminate` is never called while the drain runs. After a termination signal the process then stays up until the supervisor kills it, and the overrun warning is logged only when the drain returns. A drain or a terminate that throws is logged by the class of the capability and of the exception only, without the exception's message or stack.
 
-The stop notice, `Shutdown signal received, draining`, is written once to the standard error by the shutdown hook itself, not through the logging framework: the framework's own shutdown hook runs at the same time and removes its handlers, so a record logged from a hook can be lost. A stop requested while a host part is still joining the transactions, before the composition has started, starts nothing and never logs `Exeris Identity running on`.
+The stop notice, `Shutdown signal received, draining`, is written once to the standard error by the shutdown hook itself, not through the logging framework (see [why](../explanation/launcher-stop-and-log-redaction.md#why-the-stop-notice-bypasses-the-logging-framework)). A stop requested while a host part is still joining the transactions, before the composition has started, starts nothing and never logs `Exeris Identity running on`.
 
 A failure is treated as the interrupt's, and not as a failure of the service, only when both hold: the interrupt flag of the launcher's thread is still set, and an `InterruptedException`, an `InterruptedIOException` or a `ClosedByInterruptException` is in the failure's cause chain, where an `InterruptedIOException` counts only by its exact class. A subclass of it does not count, because it is raised for other causes as well: a `SocketTimeoutException` is a connect or read timeout, and it is a failure of the network whatever the flag. That covers a capability that refuses to be built on an interrupted thread and a kernel that surfaces the interrupt as a wrapped exception. The one case that is not recognised is a failure of the kernel's boot that does not carry such a cause, or after which the flag was cleared: the launcher cannot tell it from a failure of another cause and does not guess, so it ends with status 70 and logs it as a failure.
 
 The configuration check and the database role check are never classified as a stop. A failure of either ends with its own status (78 for a configuration or role error, 69 when the database cannot be used) whatever the flag. The consequence is that with the flag already set when `serve` is called nothing is checked, so a configuration or role error is not reported in that call: it ends with 0.
 
-A connection that a client keeps open can delay the stop by the kernel's HTTP idle timeout (30 s by default). The kernel counts a keep-alive connection as busy while it is parked between requests when its last request was slow, meaning more than about 100 ms from the start of that connection's request-loop iteration to the end of the handler, a time that includes how long the client took to send the request. The stop then waits for the idle timeout to reclaim the connection, and the stopping thread spins on a CPU meanwhile. Any client that pauses more than about 100 ms between requests on a connection it keeps open triggers this, for example a health probe that polls once a second. This is [exeris-kernel issue 835](https://github.com/exeris-systems/exeris-kernel/issues/835), seen with kernel 0.13.1. With the default idle timeout the stop took about 30 to 35 s; a service that no client holds a connection to stops in under a second. Closing the clients' connections before the stop avoids the delay, for example by taking the instance out of the load balancer's rotation before signalling it.
+A connection that a client keeps open can delay the stop by the kernel's HTTP idle timeout, the `idleTimeoutMillis` of the kernel's `HttpConfig`, whose default is 30 000 ms and which the launcher does not set. Taking the instance out of the load balancer's rotation before signalling it, or closing the clients' connections, avoids the delay. The cause is [exeris-kernel issue 835](https://github.com/exeris-systems/exeris-kernel/issues/835), seen with kernel 0.13.1; [how a kept-open connection holds the stop](../explanation/launcher-stop-and-log-redaction.md#why-a-kept-open-connection-delays-the-stop) explains it.
 
 Give the process a stop grace of at least 60 s (for example `TimeoutStopSec=60` in systemd, `--stop-timeout 60` for a container) so the supervisor does not kill it mid-drain with SIGKILL.
 
 ### Secrets in the launcher's output
 
-A message that the kernel or a driver produced is passed through a redaction before the launcher logs it. A withheld value is replaced by `<withheld>`; a message with nothing to say is logged as `(no message)`. The launcher gives two different assurances.
+Every text the launcher logs that it did not write itself is passed through a redaction first: the message of the kernel, of a driver or of a configuration refusal, and a SQLSTATE. The launcher's own constant lines, and the class names it logs for failures whose message is not ours to print, are logged directly. A withheld value is replaced by `<withheld>`; a message with nothing to say is logged as `(no message)`. The launcher gives two different assurances.
 
-**Configured secrets: always.** The database password (`EXERIS_DATABASE_*`) is withheld wherever it occurs in such a message, in these forms:
+**Configured secrets: always.** The passwords the command is configured with are withheld wherever they occur in such a message, in these forms. They are read from the environment without recording a problem, so they are known when the configuration itself is what failed:
+
+| Command | Secrets withheld |
+| --- | --- |
+| `migrate` | the migration password (`EXERIS_MIGRATE_DATABASE_PASSWORD` or its `_FILE`) and, when configured, the service password (`EXERIS_DATABASE_PASSWORD` or its `_FILE`) |
+| `serve` | the service password |
+| `bootstrap-owner` | the service password and the content of the password file once it has been read |
+
 
 | Form | Matched |
 | --- | --- |
@@ -79,7 +86,7 @@ A secret shorter than 3 characters is withheld only where the structure rules be
 | `Cookie:` and `Set-Cookie:` lines | everything after the colon, to the end of the line |
 | `--<sensitive name> <word>` | the next word |
 
-**Cost to readability.** An unquoted value of a password name outside a URL query withholds the rest of its line, because nothing in the text says where a password that may hold blanks, commas and `&` ends. A driver message that dumps its properties, such as `{user=u, password=x, ssl=true}`, therefore loses everything that follows the password (`, ssl=true}`). A URL keeps its host, port, database and parameters, because its password ends at the `@` of the authority or at the next `&`, `;` or white space of a query.
+Withholding the rest of the line after an unquoted password name costs readability: a driver message such as `{user=u, password=x, ssl=true}` loses `, ssl=true}`, while a URL keeps its host, port, database and parameters. The reasons are in [why the redaction withholds so much](../explanation/launcher-stop-and-log-redaction.md#why-the-redaction-withholds-so-much).
 
 A name is a run of letters, digits, `_`, `.` and `-`. A *password name* contains `password`, `passwd`, `pwd` or `passphrase`, in any case. A *sensitive name* is a password name, or contains `secret`, `token` or `credential`, or ends in a key word: its last component (split at `_`, `.`, `-` and case changes) is `key`, or `api`, `ssl`, `tls`, `private`, `access`, `secret`, `auth`, `encryption`, `signing`, `master`, `hmac`, `pass`, `session`, `client`, `license`, `aes`, `rsa` or `jwt` followed by `key`. `monkey`, `keystore` and `key_id` are not sensitive. `Name.java:42` is a stack-trace position, never a label. The `=` form of `authorization` and `cookie`, the short flag `-p<value>`, and a secret in free text (`password is hunter2`) are not covered.
 
@@ -100,7 +107,7 @@ It needs everything `serve` needs (the identity configuration, `EXERIS_ENVIRONME
 - **Refusals** change nothing. Before the kernel boots: incomplete or unusable configuration (all problems are listed together), a password outside the policy, a service role that is a superuser or `BYPASSRLS`. These need no licence. After it boots, from inside the transaction: an account already exists (status 73), the schema is not migrated for the service role (65: the credential store's table is missing or the role may not use it) and a credential table under row-level security (78). The host reads no table of the credential store itself, and the service role cannot read the migration record, so these three refusals need the kernel to have booted and therefore a licence.
 - **The kernel boots persistence and scheduling only**, no listener, so the licence manifest (`EXERIS_LICENSE_MANIFEST_PATH`) is required as for `serve`; without one a production-class environment ends with status 70 and no account, whatever the database holds.
 - **Membership.** This service keeps no membership table; tenant membership and roles belong to the host's `MembershipDirectory`. With a directory configured, the account is granted `owner` in the configured tenant inside the same transaction as the account, so a failing grant leaves no account. The tenant must already mean something to the host. With no directory configured (outside production-class environments only), the account is created and belongs to no tenant: its tokens name no tenant and carry no role and no scope, so it cannot issue an invitation and nobody can be invited. The operator then records the owner role for that subject (its id is logged) in the host's membership store, and the owner signs in again to obtain a token that names the tenant.
-- **Nothing secret is logged**: not the password, the file's content, the database password or the address; no token is issued.
+- **Nothing secret is logged**: not the password, the file's content, the database password or the address; no token is issued. The messages of the kernel, of the database driver and of a configuration refusal are logged with the secrets listed under [Secrets in the launcher's output](#secrets-in-the-launchers-output) withheld.
 
 | Status | Meaning |
 | --- | --- |
@@ -108,7 +115,7 @@ It needs everything `serve` needs (the identity configuration, `EXERIS_ENVIRONME
 | 64 | the command line was not understood |
 | 65 | the schema is not migrated for the service role (found after the kernel booted) |
 | 69 | the database cannot be used: it cannot be reached, or it refuses the service role's credentials (SQLSTATE 28P01 for a wrong password; 08001 for credentials placed in the URL) |
-| 70 | the kernel did not boot, the provisioning did not run or the transaction failed; nothing was committed |
+| 70 | the kernel did not boot, the provisioning did not run or the transaction failed; nothing was committed. For a kernel that did not boot one ERROR line carries the kernel's message with the service database password, the password file's content and any password in a connection URL withheld; for any other failure it names only the exception class |
 | 73 | an account already exists; nothing was changed (found after the kernel booted) |
 | 78 | the configuration cannot be used, or the credential table is under row-level security, which the command refuses because the first account is decided for the whole deployment |
 

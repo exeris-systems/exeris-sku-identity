@@ -70,7 +70,7 @@ The tests tagged `kernel-boot` boot the real kernel, which refuses to start with
 
 ## Documentation
 
-- [Run the service](docs/how-to/run-the-service.md), the [configuration](docs/reference/configuration.md), [launcher](docs/reference/launcher.md) and [HTTP API](docs/reference/http-api.md) references, and [Host parts and the service's transactions](docs/explanation/host-parts.md).
+- [Run the service](docs/how-to/run-the-service.md), the [configuration](docs/reference/configuration.md), [launcher](docs/reference/launcher.md) and [HTTP API](docs/reference/http-api.md) references, [Host parts and the service's transactions](docs/explanation/host-parts.md), and [Stopping the launcher and redacting its log](docs/explanation/launcher-stop-and-log-redaction.md).
 - [`AGENTS.md`](AGENTS.md) — the repository's operating contract and invariants.
 - [SKU conventions](https://github.com/exeris-systems/exeris-docs/blob/main/standards/sku-conventions.md) — the rules a Platform SKU repository follows.
 - [Capability licence registry](https://github.com/exeris-systems/exeris-docs/blob/main/cap-license-registry.md) — the licence value of every cap.
