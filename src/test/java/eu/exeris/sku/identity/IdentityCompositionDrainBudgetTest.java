@@ -846,8 +846,8 @@ class IdentityCompositionDrainBudgetTest {
     class FlagAndBounds {
 
         @Test
-        @DisplayName("The flag a caller entered with is still set after a drain consumed it by throwing InterruptedException, and the next drain sees it too")
-        void flagConsumedByADrainIsRestored() throws Exception {
+        @DisplayName("The flag a caller entered with is set on return after a drain consumed it by throwing InterruptedException, and the next drain sees it clear")
+        void flagConsumedByADrainStaysConsumedForTheNextDrainAndIsSetOnReturn() throws Exception {
             Fixture fixture = new Fixture();
             fixture.cap("D").onDrain = () -> Thread.sleep(Duration.ofSeconds(30));
 
@@ -855,7 +855,7 @@ class IdentityCompositionDrainBudgetTest {
 
             assertThat(ran.thrown()).isNull();
             assertThat(ran.flagAfter()).as("the caller's own flag").isTrue();
-            assertThat(fixture.cap("C").flagSeenByDrain).as("the next drain").containsExactly(true);
+            assertThat(fixture.cap("C").flagSeenByDrain).as("the next drain").containsExactly(false);
         }
 
         @Test

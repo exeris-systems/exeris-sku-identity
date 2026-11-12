@@ -8,7 +8,6 @@ import eu.exeris.sku.identity.config.IdentityConfig;
 import eu.exeris.sku.identity.http.IdentityRoutes;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.JdbcTransactionalExecutor;
-import eu.exeris.sku.identity.support.KnownDefect;
 import eu.exeris.sku.identity.support.PostgresSupport;
 import eu.exeris.sku.identity.support.RecordingNotificationDispatcher;
 import eu.exeris.sku.identity.support.TestConfig;
@@ -51,8 +50,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     or at the end of that drain.
  * </ul>
  *
- * When no watchdog fires the flag is not touched by the composition: a flag set on entry is visible to every
- * drain and terminate, and a drain that consumes an interrupt leaves it consumed. Every interleaving is
+ * When no watchdog fires the flag is not touched by the composition: each drain and terminate sees the flag
+ * the one before it left, so a drain that consumes an interrupt, the entry flag included, leaves it consumed
+ * for those that follow; the flag set on entry is still set on return. Every interleaving is
  * forced with latches; the capabilities are recording doubles, with no database and no kernel.
  */
 @DisplayName("IdentityComposition: the rule for the interrupt flag across a stop")
@@ -504,7 +504,7 @@ class IdentityCompositionInterruptRuleTest {
         static Expected of(Row row, boolean flagAtEnd) {
             boolean setWhenTheWatchdogFired = row.third() == Third.BEFORE || (row.entry() && row.watchdogPending());
             boolean onReturn = row.entry() || (row.fires() ? setWhenTheWatchdogFired || flagAtEnd : flagAtEnd);
-            boolean visible = !row.fires() && (row.entry() || flagAtEnd);
+            boolean visible = !row.fires() && flagAtEnd;
             return new Expected(onReturn, visible);
         }
     }
@@ -781,19 +781,16 @@ class IdentityCompositionInterruptRuleTest {
 
     @ParameterizedTest(name = "blocking={0}")
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    @KnownDefect("expected: a flag set on entry stays visible to every terminate (stop Javadoc: 'a flag set on entry"
-            + " stays visible to every drain and terminate'); actual: after a drain the composition sets it again,"
-            + " but after a terminate that consumed it nothing does, so the later terminates see it clear"
-            + " (IdentityComposition.java:497 terminateFirst, module.terminate() with no restore)")
-    @DisplayName("3b. A flag set on entry, no watchdog fires, and a terminate consumes it: the later terminates still see it")
-    void entryFlagConsumedByATerminateStaysVisibleToTheLaterTerminates(boolean blocking) throws Exception {
+    @DisplayName("3b. A flag set on entry, no watchdog fires, and a terminate consumes it: the later terminates see it clear, and the flag is set on return")
+    void entryFlagConsumedByATerminateIsClearForTheLaterTerminates(boolean blocking) throws Exception {
         Fixture fixture = fixtureWhoseTerminateConsumes("C", blocking);
 
-        stopped(fixture, GENEROUS, true);
+        Ran ran = stopped(fixture, GENEROUS, true);
 
         assertThat(fixture.cap("B").flagSeenByTerminate).as("terminate B, after the consuming terminate C")
-                .containsExactly(true);
-        assertThat(fixture.cap("A").flagSeenByTerminate).as("terminate A").containsExactly(true);
+                .containsExactly(false);
+        assertThat(fixture.cap("A").flagSeenByTerminate).as("terminate A").containsExactly(false);
+        assertThat(ran.flagAfter()).as("set on entry, so set on return").isTrue();
     }
 
     @Test

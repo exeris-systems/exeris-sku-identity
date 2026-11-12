@@ -460,20 +460,23 @@ class IdentityCompositionInterruptOwnershipTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(End.class)
-    @DisplayName("1a. A flag set on entry, the watchdog never fires: it is set on return, and every drain and terminate sees it")
+    @DisplayName("1a. A flag set on entry, the watchdog never fires: it is set on return, and every later drain and terminate sees the flag as the first drain left it")
     void entryFlagSetWatchdogDoesNotFire(End end) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
         fixture.cap("D").onDrain = script(fixture.cap("D"), probe, Wait.NONE, end);
+        boolean leftSet = end != End.CONSUMES_AND_RETURNS && end != End.THROWS_IE_REAL;
 
         Ran ran = stopped(fixture, GENEROUS, true);
 
         assertThat(ran.thrown()).isNull();
-        assertThat(ran.flagAfter()).isTrue();
+        assertThat(ran.flagAfter()).as("set on entry, so set on return").isTrue();
         assertThat(fixture.entries("drain")).containsExactly("drain:D", "drain:C", "drain:B", "drain:A");
         assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
         fixture.caps.stream().filter(c -> !c.name.equals("D")).forEach(cap ->
-                assertThat(allTrue(cap.flagSeenByTerminate)).as("terminate " + cap.name).isTrue());
+                assertThat(cap.flagSeenByDrain).as("drain " + cap.name).containsExactly(leftSet));
+        fixture.caps.forEach(cap ->
+                assertThat(cap.flagSeenByTerminate).as("terminate " + cap.name).containsExactly(leftSet));
     }
 
     @ParameterizedTest(name = "{0}")
