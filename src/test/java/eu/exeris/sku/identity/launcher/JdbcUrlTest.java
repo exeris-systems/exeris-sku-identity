@@ -570,7 +570,7 @@ class JdbcUrlTest {
     }
 
     @Test
-    @DisplayName("Parameters of the earlier, wider rule are refused: free text, files, sockets, classes, logging, duplicates and every alias of a credential")
+    @DisplayName("Parameters outside the allow-list are refused: free text, files, sockets, classes, logging, duplicates and every alias of a credential")
     void parametersOutsideTheListAreRefused() {
         List<String> urls = List.of(
                 BASE + "?ssl=false&ssl=true",

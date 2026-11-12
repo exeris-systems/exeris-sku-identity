@@ -213,8 +213,8 @@ class ServiceStopContractTest {
     // ---- 21 ----------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("Earlier semantics: withdrawal first, then the action; the first failure is returned with the second suppressed; a stop with nothing admitted runs the withdrawal alone")
-    void earlierSemantics() {
+    @DisplayName("The withdrawal runs first, then the action; the first failure is returned with the second suppressed; a stop with nothing admitted runs the withdrawal alone")
+    void withdrawalThenActionAndTheFirstFailureIsReturned() {
         List<String> order = new ArrayList<>();
         IllegalStateException one = new IllegalStateException("withdrawal");
         IllegalArgumentException two = new IllegalArgumentException("action");

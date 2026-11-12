@@ -150,7 +150,7 @@ class ServeStopFailureIT {
     }
 
     @Test
-    @DisplayName("A fatal VM error from the drain keeps its earlier handling: no stop-failure line, and the signal still ends the process with 143")
+    @DisplayName("A fatal VM error from the drain is not reported as a stop failure: no stop-failure line, and the signal still ends the process with 143")
     void fatalErrorIsNotReportedAsAStopFailure() throws Exception {
         Run run = signalled(FailingStopPart.DRAIN_FATAL, false);
 
