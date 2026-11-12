@@ -243,7 +243,7 @@ final class ForeignLogs {
         // of an argument; they are configuration calls, not part of the logging path.
 
         @Override
-        public void setLevel(java.util.logging.Level level) {
+        public synchronized void setLevel(java.util.logging.Level level) {
             wrapped.setLevel(level);
         }
 
@@ -253,7 +253,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public void setFilter(java.util.logging.Filter filter) {
+        public synchronized void setFilter(java.util.logging.Filter filter) {
             wrapped.setFilter(filter);
         }
 
@@ -263,7 +263,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public void setFormatter(java.util.logging.Formatter formatter) {
+        public synchronized void setFormatter(java.util.logging.Formatter formatter) {
             wrapped.setFormatter(formatter);
         }
 
@@ -273,7 +273,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public void setEncoding(String encoding) throws java.io.UnsupportedEncodingException {
+        public synchronized void setEncoding(String encoding) throws java.io.UnsupportedEncodingException {
             wrapped.setEncoding(encoding);
         }
 
@@ -283,7 +283,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public void setErrorManager(java.util.logging.ErrorManager manager) {
+        public synchronized void setErrorManager(java.util.logging.ErrorManager manager) {
             wrapped.setErrorManager(manager);
         }
 

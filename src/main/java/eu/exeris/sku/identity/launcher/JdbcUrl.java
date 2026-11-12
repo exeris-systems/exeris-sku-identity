@@ -35,7 +35,7 @@ final class JdbcUrl {
     private static final Pattern PORT = Pattern.compile("[0-9]{1,5}");
     private static final Pattern DATABASE = Pattern.compile("[A-Za-z0-9._~%-]+");
     private static final Pattern BOOLEAN = Pattern.compile("true|false");
-    private static final Pattern IDENTIFIER_LIST = Pattern.compile("[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*");
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_]+");
     private static final Pattern APPLICATION_NAME = Pattern.compile("[A-Za-z0-9._-]{1,63}");
     private static final Pattern VERSION = Pattern.compile("[0-9]{1,6}(\\.[0-9]{1,6}){0,2}");
 
@@ -124,7 +124,7 @@ final class JdbcUrl {
                 Map.entry("loadBalanceHosts", BOOLEAN.asMatchPredicate()),
                 Map.entry("reWriteBatchedInserts", BOOLEAN.asMatchPredicate()),
                 Map.entry("ApplicationName", APPLICATION_NAME.asMatchPredicate()),
-                Map.entry("currentSchema", value -> value.length() <= 255 && IDENTIFIER_LIST.matcher(value).matches()),
+                Map.entry("currentSchema", JdbcUrl::identifierList),
                 Map.entry("stringtype", words("unspecified", "varchar")),
                 Map.entry("assumeMinServerVersion", VERSION.asMatchPredicate()),
                 Map.entry("gssEncMode", words("disable", "allow", "prefer", "require")),
@@ -183,5 +183,18 @@ final class JdbcUrl {
             }
         }
         return -1;
+    }
+
+    /** One or more identifiers separated by commas, at most 255 characters in all; no empty identifier. */
+    private static boolean identifierList(String value) {
+        if (value.length() > 255) {
+            return false;
+        }
+        for (String identifier : value.split(",", -1)) {
+            if (!IDENTIFIER.matcher(identifier).matches()) {
+                return false;
+            }
+        }
+        return true;
     }
 }
