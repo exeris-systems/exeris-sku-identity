@@ -874,6 +874,187 @@ class IdentityCompositionInterruptOwnershipTest {
     @DisplayName("10. What the Javadoc of drainFirst and drainWithin states")
     class Javadoc {
 
+        /** The source of the composition with the Javadoc's margins and line breaks folded to single spaces. */
+        private String source() throws java.io.IOException {
+            return java.nio.file.Files.readString(java.nio.file.Path.of("src", "main", "java", "eu", "exeris", "sku",
+                    "identity", "IdentityComposition.java")).replaceAll("\\s*\\n\\s*\\*?\\s*", " ");
+        }
+
+        @Test
+        @DisplayName("stop, 1st sentence: while no watchdog has fired the composition never writes the flag, and what a drain or a terminate does to it stays for the ones that follow")
+        void stopNeverWritesTheFlagBeforeAFire() throws Exception {
+            assertThat(source()).contains("While no watchdog has fired, the composition never writes the calling "
+                    + "thread's interrupt flag during the stop: it neither clears nor sets it, and whatever a drain "
+                    + "or a terminate does to the flag stays as that capability left it for the ones that follow.");
+            Fixture fixture = new Fixture();
+            fixture.cap("D").onDrain = () -> Thread.currentThread().interrupt();
+            fixture.cap("B").onDrain = Thread::interrupted;
+            fixture.cap("C").onTerminate = () -> Thread.currentThread().interrupt();
+            fixture.cap("A").onTerminate = Thread::interrupted;
+
+            Ran ran = stopped(fixture, GENEROUS, false);
+
+            assertThat(fixture.cap("C").flagSeenByDrain).as("after D set it").containsExactly(true);
+            assertThat(fixture.cap("B").flagSeenByDrain).as("B still sees it").containsExactly(true);
+            assertThat(fixture.cap("A").flagSeenByDrain).as("after B consumed it").containsExactly(false);
+            assertThat(fixture.cap("D").flagSeenByTerminate).containsExactly(false);
+            assertThat(fixture.cap("C").flagSeenByTerminate).containsExactly(false);
+            assertThat(fixture.cap("B").flagSeenByTerminate).as("after C set it").containsExactly(true);
+            assertThat(fixture.cap("A").flagSeenByTerminate).containsExactly(true);
+            assertThat(ran.flagAfter()).as("A consumed it and the stop began clear").isFalse();
+        }
+
+        @Test
+        @DisplayName("stop, 2nd sentence: a flag set on entry is visible to the drains and terminates only for as long as none of them consumes it and no watchdog fires")
+        void entryFlagIsVisibleUntilSomeoneConsumesIt() throws Exception {
+            assertThat(source()).contains("A flag set on entry is therefore visible to the drains and terminates only "
+                    + "for as long as none of them consumes it and no watchdog fires;");
+            Fixture viaDrain = new Fixture();
+            viaDrain.cap("C").onDrain = Thread::interrupted;
+            Fixture viaTerminate = new Fixture();
+            viaTerminate.cap("C").onTerminate = Thread::interrupted;
+
+            Ran drain = stopped(viaDrain, GENEROUS, true);
+            Ran terminate = stopped(viaTerminate, GENEROUS, true);
+
+            assertThat(viaDrain.cap("D").flagSeenByDrain).containsExactly(true);
+            assertThat(viaDrain.cap("C").flagSeenByDrain).containsExactly(true);
+            assertThat(viaDrain.cap("B").flagSeenByDrain).containsExactly(false);
+            viaDrain.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as("terminate " + cap.name)
+                    .containsExactly(false));
+            assertThat(viaTerminate.caps).allSatisfy(cap -> assertThat(cap.flagSeenByDrain).containsExactly(true));
+            assertThat(viaTerminate.cap("D").flagSeenByTerminate).containsExactly(true);
+            assertThat(viaTerminate.cap("C").flagSeenByTerminate).containsExactly(true);
+            assertThat(viaTerminate.cap("B").flagSeenByTerminate).containsExactly(false);
+            assertThat(viaTerminate.cap("A").flagSeenByTerminate).containsExactly(false);
+            assertThat(drain.flagAfter()).isTrue();
+            assertThat(terminate.flagAfter()).isTrue();
+        }
+
+        @Test
+        @DisplayName("stop, 3rd sentence: when a drain's watchdog fired the flag is clear for every later drain and every terminate")
+        void afterAFireTheFlagStaysClear() throws Exception {
+            assertThat(source()).contains("When a drain's watchdog fired, the flag is read and cleared in one step at "
+                    + "the end of that drain and stays clear for every later drain and every terminate");
+            for (boolean entry : new boolean[] {false, true}) {
+                Cap overrun = new Cap("X", Collections.synchronizedList(new ArrayList<>()));
+                Cap later = new Cap("Y", Collections.synchronizedList(new ArrayList<>()));
+                overrun.onDrain = script(overrun, new Probe(), Wait.FIRE_SPIN, End.KEEPS_AND_RETURNS);
+                boolean[] clearAfterTheFire = new boolean[1];
+
+                Ran ran = onThread(entry, () -> {
+                    Object debt = newDebt(Thread.currentThread().isInterrupted());
+                    try {
+                        assertThat(drainWithin(overrun, Duration.ofMillis(300), debt)).isFalse();
+                        clearAfterTheFire[0] = !Thread.currentThread().isInterrupted();
+                        drainWithin(later, GENEROUS, debt);
+                        later.terminate();
+                    } finally {
+                        settle(debt);
+                    }
+                    return null;
+                });
+
+                assertThat(ran.thrown()).as("entry=" + entry).isNull();
+                assertThat(clearAfterTheFire[0]).as("entry=" + entry + ": clear at the end of the drain").isTrue();
+                assertThat(later.flagSeenByDrain).as("entry=" + entry).containsExactly(false);
+                assertThat(later.flagSeenByTerminate).as("entry=" + entry).containsExactly(false);
+                assertThat(ran.flagAfter()).as("entry=" + entry + ": owed to the caller").isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("stop, 4th sentence: on return the flag is set if it was set on entry, when a watchdog fired, or at the end of a drain whose watchdog fired")
+        void flagOnReturnIsSetInExactlyThreeCases() throws Exception {
+            assertThat(source()).contains("the flag is set if it was set when the stop began (read once, on entry), or "
+                    + "was set when a watchdog fired, or was set at the end of a drain whose watchdog fired.");
+
+            Fixture onEntry = new Fixture();
+            onEntry.caps.forEach(cap -> cap.onDrain = Thread::interrupted);
+            onEntry.caps.forEach(cap -> cap.onTerminate = Thread::interrupted);
+            assertThat(stopped(onEntry, GENEROUS, true).flagAfter()).as("set on entry").isTrue();
+
+            Fixture whenItFired = new Fixture();
+            Probe probe = new Probe();
+            probe.interruptWhen(probe.started);
+            whenItFired.cap("D").onDrain = () -> {
+                probe.begin(whenItFired.cap("D"));
+                spinUntil(probe.sent);
+                probe.requireBeforeTheDeadline();
+                spinUntilEnded(probe.watchdog);
+                Thread.interrupted();
+            };
+            Ran fired = stopped(whenItFired, BUDGET, false);
+            assertThat(fired.flagAfter()).as("set when the watchdog fired, consumed afterwards").isTrue();
+            whenItFired.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).isTrue());
+
+            Fixture atTheEnd = new Fixture();
+            atTheEnd.cap("D").onDrain = script(atTheEnd.cap("D"), new Probe(), Wait.FIRE_SPIN, End.KEEPS_AND_RETURNS);
+            assertThat(stopped(atTheEnd, BUDGET, false).flagAfter()).as("set at the end of the drain").isTrue();
+
+            Fixture entryThenError = new Fixture();
+            entryThenError.cap("B").onTerminate = () -> {
+                throw new AssertionError("raised by a terminate");
+            };
+            Ran threw = stopped(entryThenError, GENEROUS, true);
+            assertThat(threw.thrown()).isInstanceOf(AssertionError.class);
+            assertThat(threw.flagAfter()).as("by throwing as well").isTrue();
+        }
+
+        @Test
+        @DisplayName("stop, 4th sentence, otherwise: the flag is as the capabilities left it, and the entry flag is read once")
+        void otherwiseTheFlagIsAsTheCapabilitiesLeftIt() throws Exception {
+            assertThat(source()).contains("Otherwise the composition leaves the flag as the capabilities left it.");
+            Fixture leftSet = new Fixture();
+            leftSet.cap("A").onTerminate = () -> Thread.currentThread().interrupt();
+            Fixture setThenConsumed = new Fixture();
+            setThenConsumed.cap("D").onDrain = () -> Thread.currentThread().interrupt();
+            setThenConsumed.cap("A").onTerminate = Thread::interrupted;
+
+            assertThat(stopped(leftSet, GENEROUS, false).flagAfter()).as("a terminate set it").isTrue();
+            assertThat(stopped(setThenConsumed, GENEROUS, false).flagAfter())
+                    .as("set during the stop, consumed by the last terminate: not the entry flag, not restored")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("stop, 5th sentence: a request consumed by a capability before the end of its drain, or by a terminate, is not restored")
+        void aRequestConsumedByTheCapabilityIsNotRestored() throws Exception {
+            assertThat(source()).contains("A stop request that arrives during the stop and is consumed by a "
+                    + "capability itself before the end of its drain");
+            assertThat(source()).contains("or by a terminate, is not restored.");
+            Fixture blocking = new Fixture();
+            blocking.cap("D").onDrain = () -> {
+                Thread caller = Thread.currentThread();
+                Thread thirdParty = new Thread(caller::interrupt, "third-party");
+                thirdParty.setDaemon(true);
+                thirdParty.start();
+                Thread.sleep(Duration.ofSeconds(30));
+            };
+            Fixture polling = new Fixture();
+            polling.cap("D").onDrain = () -> {
+                Thread caller = Thread.currentThread();
+                Thread thirdParty = new Thread(caller::interrupt, "third-party");
+                thirdParty.setDaemon(true);
+                thirdParty.start();
+                thirdParty.join();
+                Thread.interrupted();
+            };
+            Fixture terminate = new Fixture();
+            terminate.cap("D").onDrain = () -> {
+                Thread caller = Thread.currentThread();
+                Thread thirdParty = new Thread(caller::interrupt, "third-party");
+                thirdParty.setDaemon(true);
+                thirdParty.start();
+                thirdParty.join();
+            };
+            terminate.cap("C").onTerminate = Thread::interrupted;
+
+            assertThat(stopped(blocking, GENEROUS, false).flagAfter()).as("blocking call threw").isFalse();
+            assertThat(stopped(polling, GENEROUS, false).flagAfter()).as("Thread.interrupted()").isFalse();
+            assertThat(stopped(terminate, GENEROUS, false).flagAfter()).as("a terminate").isFalse();
+        }
+
         @Test
         @DisplayName("A drain runs on the calling thread, which keeps the bindings the thread carries")
         void drainRunsOnTheCallerWithItsBindings() throws Exception {

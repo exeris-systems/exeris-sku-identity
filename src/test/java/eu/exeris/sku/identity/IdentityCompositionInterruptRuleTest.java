@@ -826,4 +826,69 @@ class IdentityCompositionInterruptRuleTest {
         fixture.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as("terminate " + cap.name).containsExactly(false));
         assertThat(ran.flagAfter()).isFalse();
     }
+
+    // ---- 5: with no watchdog, the composition contributes nothing to the flag ----------------------------------
+
+    /** What a capability does to the flag, in a drain or in a terminate. */
+    private enum Touch {
+        LEAVE, CONSUME, SET;
+
+        Action action() {
+            return switch (this) {
+                case LEAVE -> () -> { };
+                case CONSUME -> Thread::interrupted;
+                case SET -> () -> Thread.currentThread().interrupt();
+            };
+        }
+
+        /** The flag after this touch, given the flag the capability saw. */
+        boolean leaves(boolean seen) {
+            return switch (this) {
+                case LEAVE -> seen;
+                case CONSUME -> false;
+                case SET -> true;
+            };
+        }
+    }
+
+    @ParameterizedTest(name = "seed={0}")
+    @org.junit.jupiter.params.provider.ValueSource(longs = {1L, 2L, 3L, 20_260_101L})
+    @DisplayName("5. No watchdog fires: each drain and terminate sees the flag the one before it left, and the flag on return is the entry flag or what the last terminate left")
+    void theCompositionContributesNothingToTheFlag(long seed) throws Exception {
+        java.util.Random random = new java.util.Random(seed);
+        for (int script = 0; script < 120; script++) {
+            boolean entry = random.nextBoolean();
+            Touch[] touches = new Touch[8];
+            for (int i = 0; i < touches.length; i++) {
+                touches[i] = Touch.values()[random.nextInt(Touch.values().length)];
+            }
+            Fixture fixture = new Fixture();
+            // drains run D, C, B, A and then the terminates D, C, B, A
+            List<String> order = List.of("D", "C", "B", "A");
+            for (int i = 0; i < 4; i++) {
+                fixture.cap(order.get(i)).onDrain = touches[i].action();
+                fixture.cap(order.get(i)).onTerminate = touches[4 + i].action();
+            }
+
+            Ran ran = stopped(fixture, GENEROUS, entry);
+
+            boolean flag = entry;
+            for (int i = 0; i < 4; i++) {
+                assertThat(fixture.cap(order.get(i)).flagSeenByDrain).as("seed " + seed + " script " + script
+                        + " entry=" + entry + " " + List.of(touches) + ": drain " + order.get(i))
+                        .containsExactly(flag);
+                flag = touches[i].leaves(flag);
+            }
+            for (int i = 0; i < 4; i++) {
+                assertThat(fixture.cap(order.get(i)).flagSeenByTerminate).as("seed " + seed + " script " + script
+                        + " entry=" + entry + " " + List.of(touches) + ": terminate " + order.get(i))
+                        .containsExactly(flag);
+                flag = touches[4 + i].leaves(flag);
+            }
+            assertThat(ran.thrown()).isNull();
+            assertThat(ran.flagAfter()).as("seed " + seed + " script " + script + " entry=" + entry + " "
+                    + List.of(touches) + ": flag on return").isEqualTo(entry || flag);
+        }
+        awaitNoWatchdog();
+    }
 }
