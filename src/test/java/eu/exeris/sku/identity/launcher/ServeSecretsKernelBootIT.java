@@ -39,12 +39,11 @@ class ServeSecretsKernelBootIT {
     }
 
     @Test
-    @DisplayName("(c) A kernel that cannot open its pool fails with its message, which may quote the URL: the credentials in it and the password are withheld")
+    @DisplayName("(c) A kernel that cannot open its pool fails with its message, which may quote the URL: the service password is withheld")
     void kernelBootFailureQuotingTheUrl() throws Exception {
         PostgresSupport.Database database = PostgresSupport.newDatabase();
         String role = "limited_" + SecretForms.lowerCaseMarker();
         String password = SecretForms.marker();
-        String inUrl = SecretForms.marker();
         try (Connection owner = database.owner(); Statement statement = owner.createStatement()) {
             statement.execute("CREATE ROLE " + role + " LOGIN PASSWORD '" + password
                     + "' NOSUPERUSER NOBYPASSRLS CONNECTION LIMIT 1");
@@ -53,14 +52,14 @@ class ServeSecretsKernelBootIT {
                 InMemoryMembershipDirectory.class.getName());
         env.put("EXERIS_DATABASE_USER", role);
         env.put("EXERIS_DATABASE_PASSWORD", password);
-        env.put("EXERIS_DATABASE_URL", database.serviceUrl() + "?ssl=false&sslpassword=" + inUrl);
+        env.put("EXERIS_DATABASE_URL", database.serviceUrl() + "?ssl=false");
         env.put("EXERIS_DATABASE_MAX_POOL_SIZE", "10");
 
         Run run = serve(env);
 
         assertThat(run.status()).as(run.output()).isEqualTo(IdentitySkuApplication.EXIT_NOT_COMPLETED);
         assertThat(run.output()).contains("The kernel did not boot");
-        SecretForms.assertNoLeaks(run.output(), "kernel boot failure", Map.of("URL", inUrl, "PASSWORD", password));
+        SecretForms.assertNoLeaks(run.output(), "kernel boot failure", Map.of("PASSWORD", password));
     }
 
     @Test

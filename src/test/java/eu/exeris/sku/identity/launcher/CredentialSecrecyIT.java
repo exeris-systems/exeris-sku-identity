@@ -19,8 +19,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * A password that an operator puts into the database URL must not reach the output on any ending that is
  * reachable without a licence: a kernel that did not boot, a database that cannot be reached, a password
- * the database refuses, a role the service must not run as, and a URL the launcher cannot use. Each value is
- * generated for the run. None of it needs a licence.
+ * the database refuses, a role the service must not run as, and a URL the launcher cannot use. A URL that
+ * carries a credential is refused before the driver is called, with SQLSTATE 08001; a URL that carries none
+ * goes to the driver and the password of the settings must stay out of the output. Each value is generated
+ * for the run. None of it needs a licence.
  */
 @DisplayName("A password in the database URL is never printed")
 class CredentialSecrecyIT {
@@ -28,35 +30,46 @@ class CredentialSecrecyIT {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /**
-     * How the password is carried in the URL. The driver reads a password parameter but takes the user and
-     * password of an authority for part of the host, so a URL in that form never reaches a database: the
-     * launcher reports it as unreachable, and the password must be absent from that report too.
+     * What the URL carries. A credential in the authority or in the query is refused by the launcher before
+     * the driver is called, so a run with such a URL ends as an unreachable database; a URL that carries no
+     * credential reaches the driver and the run goes as far as the settings take it.
      */
     private enum Form {
-        AUTHORITY(false) {
+        AUTHORITY(true) {
             @Override
             String apply(String url, String user, String password) {
                 return url.replace("://", "://" + user + ":" + password + "@");
             }
         },
-        PARAMETER(true) {
+        CREDENTIAL_PARAMETER(true) {
             @Override
             String apply(String url, String user, String password) {
-                return url + "?password=" + password;
+                return url + "?user=" + user + "&password=" + password;
+            }
+        },
+        NO_CREDENTIAL(false) {
+            @Override
+            String apply(String url, String user, String password) {
+                return url + "?ssl=false";
             }
         };
 
-        private final boolean driverReadsIt;
+        private final boolean refused;
 
-        Form(boolean driverReadsIt) {
-            this.driverReadsIt = driverReadsIt;
+        Form(boolean refused) {
+            this.refused = refused;
         }
 
         abstract String apply(String url, String user, String password);
 
-        /** The status of a run that gets past the database connection when the driver can read the URL. */
+        /** The status of a run that gets past the database connection when the driver is called. */
         int statusWhenConnected(int connected) {
-            return driverReadsIt ? connected : IdentitySkuApplication.EXIT_UNAVAILABLE;
+            return refused ? IdentitySkuApplication.EXIT_UNAVAILABLE : connected;
+        }
+
+        /** The SQLSTATE the launcher logs when the database refuses the service role's password. */
+        String stateOfWrongPassword() {
+            return refused ? "08001" : "28P01";
         }
     }
 
@@ -98,8 +111,11 @@ class CredentialSecrecyIT {
 
             assertThat(run.status()).as(form + System.lineSeparator() + run.output())
                     .isEqualTo(form.statusWhenConnected(IdentitySkuApplication.EXIT_NOT_COMPLETED));
-            if (form == Form.PARAMETER) {
+            if (form == Form.NO_CREDENTIAL) {
                 assertThat(run.output()).as("the run reached the kernel's gate").contains("No license manifest found");
+            } else {
+                assertThat(run.output()).as("the driver was not called").contains("SQLSTATE 08001")
+                        .doesNotContain("No license manifest found");
             }
             assertAbsent(run, database.servicePassword());
         }
@@ -142,7 +158,7 @@ class CredentialSecrecyIT {
             assertThat(run.status()).as(form + System.lineSeparator() + run.output())
                     .isEqualTo(IdentitySkuApplication.EXIT_UNAVAILABLE);
             assertThat(run.output()).as("the SQLSTATE of the failure is what is logged")
-                    .contains(form == Form.PARAMETER ? "SQLSTATE 28P01" : "SQLSTATE 08001");
+                    .contains("SQLSTATE " + form.stateOfWrongPassword());
             assertAbsent(run, inUrl, inSetting);
         }
     }
@@ -195,8 +211,10 @@ class CredentialSecrecyIT {
 
             assertThat(run.status()).as(form + System.lineSeparator() + run.output())
                     .isEqualTo(form.statusWhenConnected(IdentitySkuApplication.EXIT_NOT_COMPLETED));
-            if (form == Form.PARAMETER) {
+            if (form == Form.NO_CREDENTIAL) {
                 assertThat(run.output()).contains("No license manifest found");
+            } else {
+                assertThat(run.output()).contains("SQLSTATE 08001").doesNotContain("No license manifest found");
             }
             assertAbsent(run, database.servicePassword(), ownerPassword);
             assertThat(BootstrapOwnerSupport.accounts(database)).isZero();

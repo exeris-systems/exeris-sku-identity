@@ -152,12 +152,11 @@ class BootstrapOwnerSecretsIT {
 
     @Test
     @Tag("kernel-boot")
-    @DisplayName("(c) A kernel that cannot open its pool exits 70 and prints neither password, the one in the URL nor the address")
+    @DisplayName("(c) A kernel that cannot open its pool exits 70 and prints neither the service password nor the owner password nor the address")
     void kernelCannotOpenItsPool(@TempDir Path dir) throws Exception {
         PostgresSupport.Database database = PostgresSupport.newDatabase();
         String role = "limited_" + SecretForms.lowerCaseMarker();
         String service = SecretForms.marker();
-        String inUrl = SecretForms.marker();
         try (var owner = database.owner(); var statement = owner.createStatement()) {
             statement.execute("CREATE ROLE " + role + " LOGIN PASSWORD '" + service
                     + "' NOSUPERUSER NOBYPASSRLS CONNECTION LIMIT 1");
@@ -168,14 +167,13 @@ class BootstrapOwnerSecretsIT {
                 BootstrapOwnerSupport.passwordFile(dir, ownerPassword), address));
         env.put("EXERIS_DATABASE_USER", role);
         env.put("EXERIS_DATABASE_PASSWORD", service);
-        env.put("EXERIS_DATABASE_URL", database.serviceUrl() + "?ssl=false&sslpassword=" + inUrl);
+        env.put("EXERIS_DATABASE_URL", database.serviceUrl() + "?ssl=false");
         env.put("EXERIS_DATABASE_MAX_POOL_SIZE", "10");
 
         Run run = BootstrapOwnerSupport.run(env);
 
         assertThat(run.status()).as(run.output()).isEqualTo(BootstrapOwnerSupport.NOT_COMPLETED);
         Map<String, String> all = secrets(ownerPassword, service, address);
-        all.put("URL", inUrl);
         SecretForms.assertNoLeaks(run.output(), "kernel pool", all);
     }
 
