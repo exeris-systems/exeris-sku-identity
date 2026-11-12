@@ -13,7 +13,7 @@ Every setting the launcher reads, the grammar of the keyrings and the pepper, an
 
 ## Settings
 
-**Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that holds the identity settings under the same names (not the database, `EXERIS_ENVIRONMENT` or host-part settings); the environment wins. A line of the file that is not a known setting is refused by its line number, and its key is named only when it looks like a setting name (`EXERIS_` and capitals, digits and underscores). A blank value counts as unset. Every secret takes either its name or its name plus `_FILE`, the path of a readable file, never both; a trailing line break in the file is removed, and a password file larger than 1 MiB is refused. A message about a refused setting names the setting, a line number or a bound; it never repeats a value, a path or a line of a file.
+**Configuration** comes from the environment, optionally from a file named by `EXERIS_IDENTITY_CONFIG` that holds the identity settings under the same names (not the database, `EXERIS_ENVIRONMENT` or host-part settings); the environment wins. A line of the file that is not a known setting is refused by its line number, and its key is named only when it looks like a setting name (`EXERIS_` and capitals, digits and underscores). A blank value counts as unset. Every secret takes either its name or its name plus `_FILE`, the path of a readable file, never both; every trailing carriage return and line feed at the end of the file is removed, and a password file larger than 1 MiB is refused. A message about a refused setting names the setting, a line number or a bound; it never repeats a value, a path or a line of a file.
 
 Launcher and database settings:
 
