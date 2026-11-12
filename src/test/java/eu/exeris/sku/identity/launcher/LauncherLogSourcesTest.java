@@ -43,7 +43,12 @@ class LauncherLogSourcesTest {
     private static final List<Allowed> ALLOWED = List.of(
             new Allowed("eu/exeris/sku/identity/launcher/IdentitySkuApplication.java",
                     "System.err.println(\"Identity ended on a fatal VM error (\" + fatal.getClass().getName() + \")\")",
-                    "the class name of a VM error, written when no logger can be trusted to run"));
+                    "the class name of a VM error, written when no logger can be trusted to run"),
+            new Allowed("eu/exeris/sku/identity/launcher/IdentitySkuApplication.java",
+                    "System.err.println(STOP_FAILED + \" (\" + stopFailure.getClass().getName() + \")\")",
+                    "a constant and the class name of a failed stop, written by the shutdown hook when the "
+                            + "logging framework's own hook may already have removed its handlers; never a message, "
+                            + "a string form or a stack"));
 
     /** What the scan found: where, what rule, and the statement. */
     private record Finding(String file, int line, String rule, String statement) {
