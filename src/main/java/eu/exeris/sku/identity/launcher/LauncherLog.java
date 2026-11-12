@@ -1,7 +1,5 @@
 package eu.exeris.sku.identity.launcher;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,9 +14,6 @@ import java.util.Map;
  * name, is logged directly.
  */
 final class LauncherLog {
-
-    /** Largest secret file that is read to learn a secret; a larger file is not a password. */
-    private static final long MAXIMUM_SECRET_FILE_BYTES = 64 * 1024L;
 
     private LauncherLog() {
     }
@@ -94,18 +89,6 @@ final class LauncherLog {
     }
 
     private static String contentOf(Path file) {
-        try {
-            if (!Files.isRegularFile(file) || Files.size(file) > MAXIMUM_SECRET_FILE_BYTES) {
-                return null;
-            }
-            String content = Files.readString(file);
-            int end = content.length();
-            while (end > 0 && (content.charAt(end - 1) == '\n' || content.charAt(end - 1) == '\r')) {
-                end--;
-            }
-            return end == 0 ? null : content.substring(0, end);
-        } catch (IOException | RuntimeException unreadable) {
-            return null;
-        }
+        return SecretFile.read(file).content();
     }
 }
