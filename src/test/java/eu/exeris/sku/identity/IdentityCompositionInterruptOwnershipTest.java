@@ -674,9 +674,6 @@ class IdentityCompositionInterruptOwnershipTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(value = End.class, names = {"KEEPS_AND_RETURNS", "THROWS_OTHER"})
-    @KnownDefect("expected: an interrupt that arrives after the drain consumed the watchdog's is kept (the Javadoc says"
-            + " so); actual: the drain ends with the flag set, which the gate reads as 'not consumed', and the flag"
-            + " is cleared (IdentityComposition.java drainWithin, 'consumed = !end.flagAtEnd()')")
     @DisplayName("4b. The watchdog's interrupt is consumed, then a third party interrupts and the drain returns or throws another exception: the flag is set on return")
     void afterConsumedFireDrainEndsWithTheFlagSet(End end) throws Exception {
         assertKeptAfterConsumedFire(end);
@@ -943,10 +940,6 @@ class IdentityCompositionInterruptOwnershipTest {
         }
 
         @Test
-        @KnownDefect("expected: an interrupt of another source is not cleared except where it cannot be told from the"
-                + " watchdog's (drainFirst Javadoc); actual: it is cleared when it arrives after the drain consumed"
-                + " the watchdog's interrupt and the drain returns, which the code could tell apart"
-                + " (IdentityComposition.java drainWithin)")
         @DisplayName("An interrupt of another source is not cleared, except where it cannot be told from the watchdog's")
         void anotherSourceIsNotClearedWhereItCanBeTold() throws Exception {
             assertKeptAfterConsumedFire(End.KEEPS_AND_RETURNS);
