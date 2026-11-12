@@ -36,7 +36,8 @@ import java.util.Set;
  *
  * <p>The guarantee is over the <em>input</em>. The literal text of {@link #WITHHELD} that the function writes
  * is not an occurrence of anything: a secret that is a part of the placeholder (for example {@code held}) is
- * replaced wherever it occurs in the input message, and the placeholder is not re-scanned. Consequently the
+ * replaced wherever it occurs in the input message outside a placeholder already present there, and the
+ * placeholder is not re-scanned. Consequently the
  * function is not idempotent for a secret that overlaps the placeholder's characters, and it is not
  * idempotent in general either: withholding a value removes the delimiters that were inside it, which can
  * change where a later reading of the same message finds an authority or a value ending. Idempotence is not
