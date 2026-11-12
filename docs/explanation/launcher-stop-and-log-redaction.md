@@ -32,3 +32,9 @@ The same reasoning decides what the launcher redacts. Every text it did not writ
 ## Why the stop notice bypasses the logging framework
 
 The line `Shutdown signal received, draining` is written to the standard error by the shutdown hook itself. The logging framework registers a shutdown hook of its own, and JVM shutdown hooks run concurrently with no order between them. The framework's hook removes the log handlers, so a record published from the launcher's hook can arrive after the handlers are gone and be dropped. Nothing closes the standard error stream during shutdown, so a line written there is not lost. The notice is the one line that tells an operator the process saw the signal, which is why it goes the way that cannot be dropped. The line that reports a failed stop goes the same way when the hook performed the stop, and carries only the exception's class name.
+
+## Where this does not apply
+
+The delay of a stop behind a kept-open connection is a defect of kernel 0.13.1, tracked as exeris-systems/exeris-kernel#835. It is not a property of the launcher, and this section stops applying when the kernel no longer counts a parked connection as busy.
+
+The reasoning about redaction covers the launcher's own log lines and the records other loggers write through the JVM's logging. It says nothing about text a library writes straight to the standard streams, a logger given its own handler after the command started, or a host part that brings its own logging backend: none of those pass through the redaction.
