@@ -353,24 +353,6 @@ public final class IdentityComposition {
 
     /**
      * Runs one drain on the calling thread with a watchdog that interrupts the thread when {@code remaining}
-     * has passed, and settles the thread's flag on return as if this were the whole stop: an interrupt that
-     * is owed to the caller is set again before the call returns.
-     *
-     * @return {@code false} when the watchdog interrupted the drain; {@code true} otherwise
-     * @throws Exception what the drain threw, unless the watchdog had fired when it threw the
-     *         {@link InterruptedException}
-     */
-    private static boolean drainWithin(CapabilityLifecycleHooks module, Duration remaining) throws Exception {
-        InterruptDebt debt = new InterruptDebt(false);
-        try {
-            return drainWithin(module, remaining, debt);
-        } finally {
-            debt.settle();
-        }
-    }
-
-    /**
-     * Runs one drain on the calling thread with a watchdog that interrupts the thread when {@code remaining}
      * has passed.
      *
      * <p>The watchdog interrupts under a gate in which it also records whether the thread's flag was already
