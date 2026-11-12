@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
  * The identity service's runtime configuration, read from environment variables and an optional
@@ -375,7 +376,7 @@ public record IdentityConfig(
         try {
             return TokenIssuerConfig.fromEnvironment(in.subset(TOKEN_ISSUER_PREFIX));
         } catch (TokenIssuerConfigurationException e) {
-            in.problem(e.getMessage());
+            in.problem("token issuer settings are not usable: " + in.namesIn(e.getMessage(), TOKEN_ISSUER_KEYS));
             return null;
         }
     }
@@ -421,8 +422,8 @@ public record IdentityConfig(
         try {
             RateLimitFilterSettings.fromProperties(rateLimitProperties(rateLimit));
         } catch (IllegalStateException | IllegalArgumentException e) {
-            in.problem("rate limiting: " + e.getMessage() + " (" + RATELIMIT_TRUSTED_PROXIES + ", "
-                    + RATELIMIT_FORWARDED_HEADER + ")");
+            in.problem("rate limiting is not usable: check " + RATELIMIT_TRUSTED_PROXIES + " and "
+                    + RATELIMIT_FORWARDED_HEADER);
         }
         return rateLimit;
     }
@@ -441,7 +442,8 @@ public record IdentityConfig(
         try {
             lockout = new LockoutPolicy((int) attempts, Duration.ofSeconds(window), Duration.ofSeconds(lock));
         } catch (IllegalArgumentException e) {
-            in.problem("credential lockout: " + e.getMessage());
+            in.problem("credential lockout is not usable: check " + LOCKOUT_MAX_ATTEMPTS + ", "
+                    + LOCKOUT_FAILURE_WINDOW_SECONDS + " and " + LOCKOUT_DURATION_SECONDS);
         }
 
         TokenPolicy token = null;
@@ -455,7 +457,8 @@ public record IdentityConfig(
             token = new TokenPolicy(Duration.ofSeconds(verification), Duration.ofSeconds(reset),
                     Duration.ofSeconds(cooldown));
         } catch (IllegalArgumentException e) {
-            in.problem("credential tokens: " + e.getMessage());
+            in.problem("credential token validity is not usable: check " + TOKEN_VERIFICATION_VALIDITY_SECONDS
+                    + ", " + TOKEN_RESET_VALIDITY_SECONDS + " and " + TOKEN_ISSUE_COOLDOWN_SECONDS);
         }
 
         PasswordPolicy password = null;
@@ -464,8 +467,8 @@ public record IdentityConfig(
         try {
             password = new PasswordPolicy((int) min, (int) max);
         } catch (IllegalArgumentException e) {
-            in.problem("password length: " + e.getMessage() + " (" + PASSWORD_MIN_LENGTH + ", "
-                    + PASSWORD_MAX_LENGTH + ")");
+            in.problem("password length is not usable: check " + PASSWORD_MIN_LENGTH + " and "
+                    + PASSWORD_MAX_LENGTH);
         }
         return new Credentials(lockout, token, password);
     }
@@ -478,7 +481,8 @@ public record IdentityConfig(
         try {
             return new PasswordEncoderConfig(memory, iterations, parallelism, d.hashLength());
         } catch (IllegalArgumentException e) {
-            in.problem("password hashing: " + e.getMessage());
+            in.problem("password hashing is not usable: check " + ARGON2_MEMORY_KIB + ", " + ARGON2_ITERATIONS
+                    + " and " + ARGON2_PARALLELISM);
             return null;
         }
     }
@@ -588,6 +592,16 @@ public record IdentityConfig(
             problems.add(text);
         }
 
+        /**
+         * The setting names among {@code known} that a foreign message mentions, in name order. Only names
+         * the configuration itself declares are returned, so nothing else the message holds is repeated.
+         */
+        String namesIn(String message, Set<String> known) {
+            List<String> found = new TreeSet<>(known).stream()
+                    .filter(name -> message != null && message.contains(name)).toList();
+            return found.isEmpty() ? String.join(", ", new TreeSet<>(known)) : String.join(", ", found);
+        }
+
         void fail() {
             if (!problems.isEmpty()) {
                 throw new IdentityConfigException(problems);
@@ -632,7 +646,7 @@ public record IdentityConfig(
                 return fallback;
             }
             if (parsed < min || parsed > max) {
-                problem(key + " must be between " + min + " and " + max + ", not " + parsed);
+                problem(key + " must be between " + min + " and " + max);
                 return fallback;
             }
             return parsed;
