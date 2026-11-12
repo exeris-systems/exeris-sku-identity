@@ -17,9 +17,11 @@ import java.util.Arrays;
 import java.util.Set;
 
 /**
- * Reads the first account's password from a file. The content goes from the file's bytes to a character
- * array and nowhere else: no {@code String} holds it, and every intermediate buffer is zeroed before this
- * class returns, whether it succeeds or not. A message about a refused file names the setting and the rule,
+ * Reads the first account's password from a file. Within this class the content goes from the file's bytes
+ * to a character array and nowhere else: no {@code String} holds it here, and every intermediate buffer is
+ * zeroed before this class returns, whether it succeeds or not. What the caller does with the array is the
+ * caller's: the launcher also hands it to {@link ForeignLogs#learn(char[])}, which keeps a string copy for
+ * the life of the process so that other loggers' records can be redacted. A message about a refused file names the setting and the rule,
  * never the content.
  */
 final class PasswordFile {
