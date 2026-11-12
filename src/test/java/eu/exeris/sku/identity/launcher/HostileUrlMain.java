@@ -24,7 +24,8 @@ import java.util.logging.Logger;
  *
  * <p>Each line of the file is {@code id TAB url}. For each URL the output has a line
  * {@code RESULT id reached=<calls> state=<SQLSTATE> class=<exception class>} and nothing derived from the URL.
- * An id that starts with {@code DIRECT} bypasses the launcher and calls the driver, as a control.
+ * An id that starts with {@code DIRECT} bypasses the launcher and calls the driver, as a control. The second
+ * and third arguments, when given, are the role and the password the connection is opened with.
  */
 public final class HostileUrlMain {
 
@@ -96,6 +97,8 @@ public final class HostileUrlMain {
         }
         DriverManager.registerDriver(new Recording(real));
         DriverManager.registerDriver(real);
+        String user = arguments.length > 1 ? arguments[1] : "svc";
+        String password = arguments.length > 2 ? arguments[2] : "pw";
         List<String> lines = new ArrayList<>(Files.readAllLines(Path.of(arguments[0])));
         for (String line : lines) {
             int tab = line.indexOf('\t');
@@ -105,7 +108,8 @@ public final class HostileUrlMain {
             String state = "none";
             String type = "none";
             try (Connection connection = id.startsWith("DIRECT")
-                    ? DriverManager.getConnection(url, "svc", "pw") : new DatabaseSettings(url, "svc", "pw").open()) {
+                    ? DriverManager.getConnection(url, user, password)
+                    : new DatabaseSettings(url, user, password).open()) {
                 state = "connected";
             } catch (SQLException e) {
                 state = String.valueOf(e.getSQLState());
