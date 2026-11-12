@@ -227,13 +227,13 @@ class StopUnderInterruptTest {
     /**
      * The serving thread of the launcher performs the stop with its flag clear only when the service failed
      * (the {@code finally} of the callback). A third party interrupt that coalesces with the watchdog's
-     * while an overrunning drain is abandoned is lost; the stop still completes, hands back no failure and
-     * terminates everything, and the ending, and so the exit status, is decided by the recorded outcome and
-     * not by the flag.
+     * while an overrunning drain is abandoned is kept: the stop still completes, hands back no failure and
+     * terminates everything, the flag is set on return, and the ending, and so the exit status, is decided
+     * by the recorded outcome and not by the flag.
      */
     @Test
-    @DisplayName("Characterisation: a failed service stops on the serving thread, a third party interrupt coalesces with the watchdog's during an overrunning drain and is lost; the stop completes and the status is that of the failure")
-    void lostInterruptOnTheServingThreadOfAFailedService() throws Exception {
+    @DisplayName("A failed service stops on the serving thread, a third party interrupt coalesces with the watchdog's during an overrunning drain and is kept; the stop completes, the flag is set on return and the status is that of the failure")
+    void interruptOnTheServingThreadOfAFailedServiceIsKept() throws Exception {
         Fixture fixture = new Fixture();
         CountDownLatch fired = new CountDownLatch(1);
         CountDownLatch sent = new CountDownLatch(1);
@@ -264,7 +264,8 @@ class StopUnderInterruptTest {
         assertThat(ran.thrown()).isNull();
         assertThat(ran.stopFailure()).isNull();
         assertThat(fixture.entries("terminate")).containsExactly("terminate:D", "terminate:C", "terminate:B", "terminate:A");
-        assertThat(ran.flagAfter()).as("characterisation: the host's request is lost").isFalse();
+        assertThat(ran.flagAfter()).as("the host's request is kept").isTrue();
+        fixture.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as(cap.name).containsExactly(false));
         assertThat(IdentitySkuApplication.exitStatus(IdentitySkuApplication.Ending.SERVICE_FAILED))
                 .as("the status of a failed service does not read the flag")
                 .isEqualTo(IdentitySkuApplication.exitStatus(IdentitySkuApplication.Ending.KERNEL_NOT_BOOTED));

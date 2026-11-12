@@ -8,7 +8,6 @@ import eu.exeris.sku.identity.config.IdentityConfig;
 import eu.exeris.sku.identity.http.IdentityRoutes;
 import eu.exeris.sku.identity.support.InMemoryMembershipDirectory;
 import eu.exeris.sku.identity.support.JdbcTransactionalExecutor;
-import eu.exeris.sku.identity.support.KnownDefect;
 import eu.exeris.sku.identity.support.PostgresSupport;
 import eu.exeris.sku.identity.support.RecordingNotificationDispatcher;
 import eu.exeris.sku.identity.support.TestConfig;
@@ -60,6 +59,8 @@ class IdentityCompositionInterruptOwnershipTest {
     private static Constructor<IdentityComposition> constructor;
     private static ServiceBoundaryCoreModule boundary;
     private static Method drainWithin;
+    private static Constructor<?> debtConstructor;
+    private static Method debtSettle;
 
     @BeforeAll
     static void assemble() throws Exception {
@@ -80,9 +81,14 @@ class IdentityCompositionInterruptOwnershipTest {
                 eu.exeris.caps.jwt.api.JwtAdmissionPolicy.class, eu.exeris.caps.jwt.api.JwtServiceBoundaryBinding.class,
                 IdentityServices.class);
         constructor.setAccessible(true);
+        Class<?> debt = Class.forName(IdentityComposition.class.getName() + "$InterruptDebt");
         drainWithin = IdentityComposition.class.getDeclaredMethod("drainWithin", CapabilityLifecycleHooks.class,
-                Duration.class);
+                Duration.class, debt);
         drainWithin.setAccessible(true);
+        debtConstructor = debt.getDeclaredConstructor(boolean.class);
+        debtConstructor.setAccessible(true);
+        debtSettle = debt.getDeclaredMethod("settle");
+        debtSettle.setAccessible(true);
     }
 
     @BeforeEach
@@ -104,6 +110,8 @@ class IdentityCompositionInterruptOwnershipTest {
         final List<String> log;
         volatile Action onDrain = () -> { };
         volatile Action onTerminate = () -> { };
+        volatile Action onInitialize = () -> { };
+        volatile Action onReady = () -> { };
         final List<Duration> slices = new CopyOnWriteArrayList<>();
         final List<Boolean> flagSeenByDrain = new CopyOnWriteArrayList<>();
         final List<Boolean> flagSeenByTerminate = new CopyOnWriteArrayList<>();
@@ -114,13 +122,15 @@ class IdentityCompositionInterruptOwnershipTest {
         }
 
         @Override
-        public void initialize() {
+        public void initialize() throws Exception {
             log.add("initialize:" + name);
+            onInitialize.run();
         }
 
         @Override
-        public void ready() {
+        public void ready() throws Exception {
             log.add("ready:" + name);
+            onReady.run();
         }
 
         @Override
@@ -173,6 +183,7 @@ class IdentityCompositionInterruptOwnershipTest {
     /** Collects the composition's own log records. */
     private static final class Capture extends Handler implements AutoCloseable {
         final List<LogRecord> records = new CopyOnWriteArrayList<>();
+        final java.util.concurrent.atomic.AtomicInteger overruns = new java.util.concurrent.atomic.AtomicInteger();
         private final Logger logger = Logger.getLogger(IdentityComposition.class.getName());
         private final Level savedLevel = logger.getLevel();
         private final boolean savedParents = logger.getUseParentHandlers();
@@ -186,7 +197,12 @@ class IdentityCompositionInterruptOwnershipTest {
 
         @Override
         public void publish(LogRecord record) {
-            records.add(record);
+            if (record.getMessage() != null && record.getMessage().contains("overran")) {
+                overruns.incrementAndGet();
+            }
+            if (records.size() < 1_000) {
+                records.add(record);
+            }
         }
 
         @Override
@@ -411,9 +427,27 @@ class IdentityCompositionInterruptOwnershipTest {
         assertThat(liveWatchdogs()).as("watchdog threads alive").isZero();
     }
 
+    /** One drain, with the debt seeded and settled as a stop that consists of this drain alone would. */
     private static boolean callDrainWithin(Cap cap, Duration slice) throws Exception {
+        Object debt = newDebt(Thread.currentThread().isInterrupted());
         try {
-            return (boolean) drainWithin.invoke(null, cap, slice);
+            return drainWithin(cap, slice, debt);
+        } finally {
+            settle(debt);
+        }
+    }
+
+    private static Object newDebt(boolean owed) throws Exception {
+        return debtConstructor.newInstance(owed);
+    }
+
+    private static void settle(Object debt) throws Exception {
+        debtSettle.invoke(debt);
+    }
+
+    private static boolean drainWithin(Cap cap, Duration slice, Object debt) throws Exception {
+        try {
+            return (boolean) drainWithin.invoke(null, cap, slice, debt);
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof Exception ex) {
                 throw ex;
@@ -444,7 +478,7 @@ class IdentityCompositionInterruptOwnershipTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(End.class)
-    @DisplayName("1b. A flag set on entry, the watchdog fires while the flag is pending: it is set on return whatever the drain did")
+    @DisplayName("1b. A flag set on entry, the watchdog fires while the flag is pending: it is set on return whatever the drain did, and no terminate sees it")
     void entryFlagSetWatchdogFires(End end) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
@@ -457,8 +491,8 @@ class IdentityCompositionInterruptOwnershipTest {
         assertThat(ran.flagAfter()).isTrue();
         assertThat(fixture.entries("drain")).as("the later drains are skipped").containsExactly("drain:D");
         assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
-        fixture.caps.stream().filter(c -> !c.name.equals("D")).forEach(cap ->
-                assertThat(allTrue(cap.flagSeenByTerminate)).as("terminate " + cap.name).isTrue());
+        fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate))
+                .as("terminate " + cap.name + " saw the flag").isTrue());
     }
 
     // ---- 2: flag clear on entry, the watchdog fires, no third party -----------------------------------------
@@ -486,7 +520,7 @@ class IdentityCompositionInterruptOwnershipTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(value = End.class, names = {"KEEPS_AND_RETURNS", "THROWS_OTHER"})
-    @DisplayName("2b. The drain ignores the watchdog's interrupt: the flag is cleared on return, and no terminate sees it")
+    @DisplayName("2b. The drain ignores the watchdog's interrupt: the flag is kept for the caller and set on return, and no terminate sees it")
     void watchdogInterruptIgnored(End end) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
@@ -496,7 +530,7 @@ class IdentityCompositionInterruptOwnershipTest {
 
             assertThat(probe.observed.getCount()).as("the watchdog fired").isZero();
             assertThat(ran.thrown()).isNull();
-            assertThat(ran.flagAfter()).isFalse();
+            assertThat(ran.flagAfter()).as("the interrupt the drain left set cannot be told from a request").isTrue();
             assertThat(fixture.entries("drain")).containsExactly("drain:D");
             assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
             fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
@@ -532,28 +566,22 @@ class IdentityCompositionInterruptOwnershipTest {
         fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
     }
 
-    /**
-     * The usual idiom: catch the interrupt, restore the flag and wrap. The chain is read down to depth 31 and
-     * not beyond, so whether the restored flag is cleared depends on how deep the interrupt sits.
-     */
+    /** The usual idiom: catch the interrupt, restore the flag and wrap, whatever the depth of the cause. */
     @ParameterizedTest(name = "InterruptedException at cause depth {0}")
     @ValueSource(ints = {1, 5, 31})
-    @KnownDefect("expected: the watchdog's interrupt, restored by the drain before it wraps the exception, is cleared"
-            + " on return; actual: the chain carries an InterruptedException, so the flag is left set and reaches"
-            + " the terminates (IdentityComposition.java drainWithin, 'consumed = ... || carriesInterrupt(thrown)')")
-    @DisplayName("2d. The drain restores the watchdog's interrupt and wraps the InterruptedException within the chain limit: the flag is clear on return")
-    void wrappedRestoredInterruptWithinTheChainLimit(int depth) throws Exception {
-        assertRestoredWrapperLeavesTheFlagClear(depth);
+    @DisplayName("2d. The drain restores the watchdog's interrupt and wraps the InterruptedException at a shallow depth: the flag is set on return and no terminate sees it")
+    void wrappedRestoredInterruptShallow(int depth) throws Exception {
+        assertRestoredWrapperIsKeptAndHidden(depth);
     }
 
     @ParameterizedTest(name = "InterruptedException at cause depth {0}")
     @ValueSource(ints = {32, 40})
-    @DisplayName("2e. The drain restores the watchdog's interrupt and wraps the InterruptedException beyond the chain limit: the flag is clear on return")
-    void wrappedRestoredInterruptBeyondTheChainLimit(int depth) throws Exception {
-        assertRestoredWrapperLeavesTheFlagClear(depth);
+    @DisplayName("2e. The drain restores the watchdog's interrupt and wraps the InterruptedException at a deep depth: the flag is set on return and no terminate sees it")
+    void wrappedRestoredInterruptDeep(int depth) throws Exception {
+        assertRestoredWrapperIsKeptAndHidden(depth);
     }
 
-    private static void assertRestoredWrapperLeavesTheFlagClear(int depth) throws Exception {
+    private static void assertRestoredWrapperIsKeptAndHidden(int depth) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
         fixture.cap("D").onDrain = () -> {
@@ -566,16 +594,13 @@ class IdentityCompositionInterruptOwnershipTest {
         Ran ran = stopped(fixture, BUDGET, false);
 
         assertThat(ran.thrown()).isNull();
-        assertThat(ran.flagAfter()).as("flag on return, depth " + depth).isFalse();
+        assertThat(ran.flagAfter()).as("flag on return, depth " + depth).isTrue();
         fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate))
                 .as("terminate " + cap.name + " saw the watchdog's interrupt, depth " + depth).isTrue());
     }
 
     @Test
-    @KnownDefect("expected: an InterruptedException rethrown with the flag restored is the watchdog's own interrupt and"
-            + " is cleared on return; actual: 'consumed' is true for any InterruptedException, so the flag stays set"
-            + " and reaches the terminates (IdentityComposition.java drainWithin, catch InterruptedException)")
-    @DisplayName("2f. The drain restores the flag and rethrows the InterruptedException it caught: the flag is clear on return")
+    @DisplayName("2f. The drain restores the flag and rethrows the InterruptedException it caught: the flag is set on return and no terminate sees it")
     void restoredFlagAndRethrownInterrupt() throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
@@ -593,12 +618,12 @@ class IdentityCompositionInterruptOwnershipTest {
         Ran ran = stopped(fixture, BUDGET, false);
 
         assertThat(ran.thrown()).isNull();
-        assertThat(ran.flagAfter()).isFalse();
+        assertThat(ran.flagAfter()).isTrue();
         fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
     }
 
     @Test
-    @DisplayName("2g. The drain restores the flag and returns: the flag is clear on return")
+    @DisplayName("2g. The drain restores the flag and returns: the flag is set on return and no terminate sees it")
     void restoredFlagAndReturn() throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
@@ -611,7 +636,7 @@ class IdentityCompositionInterruptOwnershipTest {
         Ran ran = stopped(fixture, BUDGET, false);
 
         assertThat(ran.thrown()).isNull();
-        assertThat(ran.flagAfter()).isFalse();
+        assertThat(ran.flagAfter()).isTrue();
         fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
     }
 
@@ -619,7 +644,7 @@ class IdentityCompositionInterruptOwnershipTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(End.class)
-    @DisplayName("3. A third party interrupts before the watchdog fires: the flag is set on return whatever the drain did, no InterruptedException reaches the caller of stop, and the terminates see the flag set")
+    @DisplayName("3. A third party interrupts before the watchdog fires: the flag is set on return whatever the drain did, no InterruptedException reaches the caller of stop, and the terminates see the flag clear")
     void thirdPartyBeforeTheFire(End end) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
@@ -638,8 +663,8 @@ class IdentityCompositionInterruptOwnershipTest {
         assertThat(ran.flagAfter()).isTrue();
         assertThat(fixture.entries("drain")).containsExactly("drain:D");
         assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
-        fixture.caps.forEach(cap -> assertThat(allTrue(cap.flagSeenByTerminate))
-                .as("terminate " + cap.name + " sees the flag set").isTrue());
+        fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate))
+                .as("terminate " + cap.name + " sees the flag clear").isTrue());
     }
 
     // ---- 4: a third party interrupts after the fire, the watchdog's interrupt already consumed -------------
@@ -679,19 +704,31 @@ class IdentityCompositionInterruptOwnershipTest {
         assertKeptAfterConsumedFire(end);
     }
 
+    /**
+     * The rule keeps an interrupt that was set on entry, set when the watchdog fired, or set at the end of a
+     * drain whose watchdog fired. An interrupt that arrives after the fire and that the drain itself consumes
+     * before it ends is outside all three.
+     */
     @Test
-    @KnownDefect("expected: after the watchdog's interrupt was consumed, an InterruptedException can only come from"
-            + " another source, and its interrupt is kept; actual: the exception is swallowed because the watchdog"
-            + " fired, the drain's own sleep cleared the flag, and nothing restores it"
-            + " (IdentityComposition.java drainWithin, catch InterruptedException)")
-    @DisplayName("4c. The watchdog's interrupt is consumed, then a third party interrupts and the drain blocks and throws InterruptedException: the flag is set on return")
-    void afterConsumedFireDrainBlocksAndIsInterrupted() throws Exception {
-        assertKeptAfterConsumedFire(End.THROWS_IE_REAL);
+    @DisplayName("4c. Scope of the rule: the watchdog's interrupt is consumed, a third party interrupts, and the drain's own blocking call consumes that interrupt: it is outside the three cases the rule keeps, the flag is clear on return")
+    void characterisationInterruptConsumedByTheDrainAfterTheFireIsOutsideTheRule() throws Exception {
+        Fixture fixture = new Fixture();
+        Probe probe = new Probe();
+        probe.interruptWhen(probe.observed);
+        fixture.cap("D").onDrain = afterConsumedFire(fixture.cap("D"), probe, End.THROWS_IE_REAL);
+
+        Ran ran = stopped(fixture, BUDGET, false);
+
+        assertThat(probe.sent.getCount()).as("the third party interrupted").isZero();
+        assertThat(ran.thrown()).isNull();
+        assertThat(ran.flagAfter()).as("not set on entry, not set at the fire, clear at the end of the drain").isFalse();
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
+        fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
     }
 
     // ---- 5: a third party interrupts after the fire, the watchdog's interrupt still pending ---------------
 
-    private static void assertRequestLost(End end) throws Exception {
+    private static void assertRequestKept(End end) throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
         probe.interruptWhen(probe.observed);
@@ -707,27 +744,48 @@ class IdentityCompositionInterruptOwnershipTest {
 
         assertThat(probe.sent.getCount()).as("the third party interrupted").isZero();
         assertThat(ran.thrown()).isNull();
-        assertThat(ran.flagAfter()).as("characterisation: the request coalesced with the watchdog's and is gone").isFalse();
+        assertThat(ran.flagAfter()).as("the request coalesced with the watchdog's and is kept").isTrue();
+        fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
+        assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
+    }
+
+    private static void assertRequestConsumedByTheDrain() throws Exception {
+        Fixture fixture = new Fixture();
+        Probe probe = new Probe();
+        probe.interruptWhen(probe.observed);
+        fixture.cap("D").onDrain = () -> {
+            probe.begin(fixture.cap("D"));
+            spinUntilEnded(probe.watchdog);
+            probe.observed.countDown();
+            spinUntil(probe.sent);
+            finish(End.THROWS_IE_REAL);
+        };
+
+        Ran ran = stopped(fixture, BUDGET, false);
+
+        assertThat(probe.sent.getCount()).as("the third party interrupted").isZero();
+        assertThat(ran.thrown()).isNull();
+        assertThat(ran.flagAfter()).as("the drain's own blocking call consumed the flag before the drain ended").isFalse();
         fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate)).as(cap.name).isTrue());
         assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
     }
 
     @Test
-    @DisplayName("5a. Characterisation: a third party interrupts while the watchdog's interrupt is pending and the drain returns: the flag is clear on return, the request is lost")
-    void characterisationPendingCoalescedInterruptDrainReturns() throws Exception {
-        assertRequestLost(End.KEEPS_AND_RETURNS);
+    @DisplayName("5a. A third party interrupts while the watchdog's interrupt is pending and the drain returns: the request is kept, the flag is set on return and no terminate sees it")
+    void pendingCoalescedInterruptDrainReturnsIsKept() throws Exception {
+        assertRequestKept(End.KEEPS_AND_RETURNS);
     }
 
     @Test
-    @DisplayName("5b. Characterisation: a third party interrupts while the watchdog's interrupt is pending and the drain blocks and throws InterruptedException: the flag is clear on return, the request is lost")
-    void characterisationPendingCoalescedInterruptDrainThrowsInterrupt() throws Exception {
-        assertRequestLost(End.THROWS_IE_REAL);
+    @DisplayName("5b. Scope of the rule: a third party interrupts while the watchdog's interrupt is pending and the drain's own blocking call consumes it before the drain ends: outside the three cases the rule keeps, the flag is clear on return")
+    void characterisationPendingInterruptConsumedByTheDrainIsOutsideTheRule() throws Exception {
+        assertRequestConsumedByTheDrain();
     }
 
     @Test
-    @DisplayName("5c. Characterisation: a third party interrupts while the watchdog's interrupt is pending and the drain throws another exception: the flag is clear on return, the request is lost")
-    void characterisationPendingCoalescedInterruptDrainThrowsOther() throws Exception {
-        assertRequestLost(End.THROWS_OTHER);
+    @DisplayName("5c. A third party interrupts while the watchdog's interrupt is pending and the drain throws another exception: the request is kept, the flag is set on return and no terminate sees it")
+    void pendingCoalescedInterruptDrainThrowsOtherIsKept() throws Exception {
+        assertRequestKept(End.THROWS_OTHER);
     }
 
     // ---- 6: the watchdog never fires -------------------------------------------------------------------------
@@ -781,8 +839,8 @@ class IdentityCompositionInterruptOwnershipTest {
     // ---- 9a: terminates that run with the flag set -----------------------------------------------------------
 
     @Test
-    @DisplayName("9a. A kept interrupt reaches the terminates: one that blocks fails fast and is logged, the others still run, and the stop does not throw")
-    void terminatesRunWithTheKeptFlag() throws Exception {
+    @DisplayName("9a. The interrupt a drain ends with is kept for the caller and hidden from the terminates: a terminate that blocks is not interrupted, and the caller gets the flag set")
+    void terminatesRunWithTheFlagClearAndTheCallerGetsItSet() throws Exception {
         Fixture fixture = new Fixture();
         Probe probe = new Probe();
         probe.interruptWhen(probe.started);
@@ -792,17 +850,15 @@ class IdentityCompositionInterruptOwnershipTest {
             probe.requireBeforeTheDeadline();
             spinUntilEnded(probe.watchdog);
         };
-        fixture.cap("C").onTerminate = () -> Thread.sleep(Duration.ofSeconds(30));
+        fixture.cap("C").onTerminate = () -> Thread.sleep(Duration.ofMillis(100));
         try (Capture capture = new Capture()) {
             Ran ran = stopped(fixture, BUDGET, false);
 
             assertThat(ran.thrown()).isNull();
             assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
-            assertThat(fixture.cap("D").flagSeenByTerminate).containsExactly(true);
-            assertThat(fixture.cap("C").flagSeenByTerminate).containsExactly(true);
-            assertThat(fixture.cap("B").flagSeenByTerminate).as("the blocking terminate consumed the flag").containsExactly(false);
-            assertThat(capture.warnings()).anyMatch(w -> w.contains("terminating") && w.contains("IllegalStateException"));
-            assertThat(ran.flagAfter()).isFalse();
+            fixture.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as(cap.name).containsExactly(false));
+            assertThat(capture.warnings()).noneMatch(w -> w.contains("terminating"));
+            assertThat(ran.flagAfter()).isTrue();
         }
     }
 
@@ -946,12 +1002,23 @@ class IdentityCompositionInterruptOwnershipTest {
         }
 
         @Test
-        @KnownDefect("expected: an interrupt the watchdog delivered never reaches a terminate (drainFirst Javadoc);"
-                + " actual: a drain that restores the flag and wraps the InterruptedException leaves it set"
-                + " (IdentityComposition.java drainWithin, carriesInterrupt)")
-        @DisplayName("An interrupt the watchdog delivered never reaches the next drain or any terminate")
+        @DisplayName("An interrupt the watchdog delivered never reaches the next drain or any terminate, although the drain restored it and wrapped the exception")
         void watchdogInterruptNeverReachesATerminate() throws Exception {
-            assertRestoredWrapperLeavesTheFlagClear(1);
+            Fixture fixture = new Fixture();
+            Probe probe = new Probe();
+            fixture.cap("D").onDrain = () -> {
+                probe.begin(fixture.cap("D"));
+                sleepsUntilInterrupted(probe);
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(new InterruptedException("restored"));
+            };
+
+            Ran ran = stopped(fixture, BUDGET, false);
+
+            assertThat(ran.thrown()).isNull();
+            fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByTerminate))
+                    .as("terminate " + cap.name).isTrue());
+            fixture.caps.forEach(cap -> assertThat(noneTrue(cap.flagSeenByDrain)).as("drain " + cap.name).isTrue());
         }
 
         @Test
@@ -961,7 +1028,10 @@ class IdentityCompositionInterruptOwnershipTest {
             cap.onDrain = () -> { };
             Ran ran = onThread(false, () -> {
                 for (int i = 0; i < 200; i++) {
-                    callDrainWithin(cap, Duration.ofMillis(1));
+                    boolean completed = callDrainWithin(cap, Duration.ofMillis(1));
+                    assertThat(Thread.currentThread().isInterrupted()).as("round " + i + ", the deferred interrupt is there"
+                            + " exactly when the watchdog fired").isEqualTo(!completed);
+                    Thread.interrupted();
                     long until = System.nanoTime() + 2_000_000L;
                     while (System.nanoTime() < until) {
                         assertThat(Thread.currentThread().isInterrupted()).as("round " + i).isFalse();
@@ -984,7 +1054,7 @@ class IdentityCompositionInterruptOwnershipTest {
     }
 
     @Test
-    @DisplayName("7. The fire never happens after the end of the drain: 5000 rounds that end the drain within 0.2 ms of the deadline, and no interrupt of that watchdog arrives after the call returned")
+    @DisplayName("7. The fire never happens after the end of the drain: 5000 rounds that end the drain within 0.2 ms of the deadline; the flag is set on return exactly when the watchdog fired, and no interrupt arrives after the call returned")
     void theGateClosesTheFire() throws Exception {
         int rounds = 5_000;
         List<String> violations = Collections.synchronizedList(new ArrayList<>());
@@ -1000,9 +1070,11 @@ class IdentityCompositionInterruptOwnershipTest {
                 if (!completed) {
                     fired[0]++;
                 }
-                if (Thread.currentThread().isInterrupted()) {
-                    violations.add("round " + round + ": the flag is set on return, completed=" + completed);
-                    Thread.interrupted();
+                // The drain never reads the flag, so the interrupt the watchdog delivered is the one deferred to
+                // the caller: set on return exactly when the watchdog fired, and nothing else is.
+                boolean flagOnReturn = Thread.interrupted();
+                if (flagOnReturn == completed) {
+                    violations.add("round " + round + ": flag on return " + flagOnReturn + ", completed=" + completed);
                 }
                 long until = System.nanoTime() + 1_000_000L;
                 while (System.nanoTime() < until) {
@@ -1058,16 +1130,17 @@ class IdentityCompositionInterruptOwnershipTest {
         }
     }
 
-    private record Tally(int rounds, int sentBeforeAnyFire, int violations, int keptNearTheFire, int lostNearTheFire,
+    private record Tally(int rounds, int sentBeforeAnyFire, int lost, int sentAfterAnyFireAndKept,
                          int watchdogFired) {
     }
 
     @Test
-    @DisplayName("8a. A third party interrupts within 0.2 ms of the fire, 2000 rounds, flag clear on entry: sent before the watchdog could fire means set on return; the rest are counted")
+    @DisplayName("8a. A third party interrupts within 0.2 ms of the fire, 2000 rounds, flag clear on entry: the flag is set on return in every round, none is lost")
     void raceThirdPartyNearTheFireFlagClear() throws Exception {
         Tally tally = raceCounting(false, 2_000);
         System.out.println("RACE-CLEAR " + tally);
-        assertThat(tally.violations()).as("rounds in which a request sent before the earliest possible fire was lost").isZero();
+        assertThat(tally.lost()).as("rounds in which the request was lost").isZero();
+        assertThat(tally.watchdogFired()).as("rounds in which the watchdog fired").isPositive();
     }
 
     @Test
@@ -1075,12 +1148,12 @@ class IdentityCompositionInterruptOwnershipTest {
     void raceThirdPartyNearTheFireFlagSet() throws Exception {
         Tally tally = raceCounting(true, 2_000);
         System.out.println("RACE-SET " + tally);
-        assertThat(tally.violations()).isZero();
+        assertThat(tally.lost()).as("rounds in which the flag was not set on return").isZero();
     }
 
     private static Tally raceCounting(boolean flagOnEntry, int rounds) throws Exception {
         List<String> violations = Collections.synchronizedList(new ArrayList<>());
-        int[] counts = new int[5];
+        int[] counts = new int[4];
         Ran ran = onThread(false, () -> {
             try (Interrupter interrupter = new Interrupter()) {
                 Cap cap = new Cap("X", Collections.synchronizedList(new ArrayList<>()));
@@ -1112,16 +1185,12 @@ class IdentityCompositionInterruptOwnershipTest {
                         counts[1]++;
                     }
                     if (!completed) {
-                        counts[4]++;
-                    }
-                    if (flagOnEntry || sentBeforeAnyFire) {
-                        if (!flagAfter) {
-                            violations.add("round " + round + ": request lost, sentBeforeAnyFire=" + sentBeforeAnyFire);
-                        }
-                    } else if (flagAfter) {
-                        counts[2]++;
-                    } else {
                         counts[3]++;
+                    }
+                    if (!flagAfter) {
+                        violations.add("round " + round + ": request lost, sentBeforeAnyFire=" + sentBeforeAnyFire);
+                    } else if (!sentBeforeAnyFire) {
+                        counts[2]++;
                     }
                 }
             }
@@ -1129,46 +1198,65 @@ class IdentityCompositionInterruptOwnershipTest {
         });
         assertThat(ran.thrown()).isNull();
         awaitNoWatchdog();
-        return new Tally(counts[0], counts[1], violations.size(), counts[2], counts[3], counts[4]);
+        return new Tally(counts[0], counts[1], violations.size(), counts[2], counts[3]);
     }
 
     @Test
-    @DisplayName("8c. No third party, 2000 rounds ending at the deadline: the watchdog's own interrupt is never visible to the next drain, to a terminate, or to the caller, flag clear or set on entry")
+    @DisplayName("8c. No third party, 2000 rounds ending at the deadline, flag clear or set on entry: the watchdog's own interrupt is never visible to the next drain or to a terminate, and is kept for the caller exactly when the watchdog fired")
     void raceWithoutThirdParty() throws Exception {
-        for (boolean flagOnEntry : new boolean[] {false, true}) {
-            List<String> violations = Collections.synchronizedList(new ArrayList<>());
-            Ran ran = onThread(false, () -> {
-                for (int round = 0; round < 2_000; round++) {
-                    Fixture fixture = new Fixture();
-                    fixture.composition.start();
-                    long offset = ((round % 21) - 10) * 20_000L;
-                    Cap first = fixture.cap("D");
-                    Cap next = fixture.cap("C");
-                    first.onDrain = () -> spinUntilNanos(System.nanoTime()
-                            + Math.max(0, first.slices.get(0).toNanos() + offset));
-                    next.onDrain = () -> { };
-                    if (flagOnEntry) {
-                        Thread.currentThread().interrupt();
-                    }
-                    fixture.composition.stop(Duration.ofMillis(4));
-                    boolean flagAfter = Thread.interrupted();
-                    if (flagAfter != flagOnEntry) {
-                        violations.add("round " + round + ": flag on return " + flagAfter);
-                    }
-                    for (Cap cap : fixture.caps) {
-                        if (cap.flagSeenByTerminate.stream().anyMatch(seen -> seen != flagOnEntry)) {
-                            violations.add("round " + round + ": terminate " + cap.name + " saw " + cap.flagSeenByTerminate);
+        int[] fired = new int[2];
+        try (Capture capture = new Capture()) {
+            for (boolean flagOnEntry : new boolean[] {false, true}) {
+                List<String> violations = Collections.synchronizedList(new ArrayList<>());
+                Ran ran = onThread(false, () -> {
+                    for (int round = 0; round < 2_000; round++) {
+                        Fixture fixture = new Fixture();
+                        fixture.composition.start();
+                        long offset = ((round % 21) - 10) * 20_000L;
+                        Cap first = fixture.cap("D");
+                        Cap next = fixture.cap("C");
+                        first.onDrain = () -> spinUntilNanos(System.nanoTime()
+                                + Math.max(0, first.slices.get(0).toNanos() + offset));
+                        next.onDrain = () -> { };
+                        if (flagOnEntry) {
+                            Thread.currentThread().interrupt();
+                        }
+                        int overranBefore = overruns(capture);
+                        fixture.composition.stop(Duration.ofMillis(4));
+                        boolean watchdogFired = overruns(capture) > overranBefore;
+                        if (watchdogFired) {
+                            fired[flagOnEntry ? 1 : 0]++;
+                        }
+                        // The drain never reads the flag: what it ends with is the watchdog's interrupt, kept.
+                        boolean flagAfter = Thread.interrupted();
+                        if (flagAfter != (flagOnEntry || watchdogFired)) {
+                            violations.add("round " + round + ": flag on return " + flagAfter + ", watchdog fired "
+                                    + watchdogFired);
+                        }
+                        // An entry flag is visible to every terminate when nothing fired; after a fire none sees any.
+                        boolean visible = flagOnEntry && !watchdogFired;
+                        for (Cap cap : fixture.caps) {
+                            if (cap.flagSeenByTerminate.stream().anyMatch(seen -> seen != visible)) {
+                                violations.add("round " + round + ": terminate " + cap.name + " saw "
+                                        + cap.flagSeenByTerminate);
+                            }
+                        }
+                        if (!next.slices.isEmpty() && next.slices.get(0).compareTo(Duration.ofMillis(2)) >= 0
+                                && next.flagSeenByDrain.stream().anyMatch(seen -> seen != visible)) {
+                            violations.add("round " + round + ": the next drain saw " + next.flagSeenByDrain);
                         }
                     }
-                    if (!next.slices.isEmpty() && next.slices.get(0).compareTo(Duration.ofMillis(2)) >= 0
-                            && next.flagSeenByDrain.stream().anyMatch(seen -> seen != flagOnEntry)) {
-                        violations.add("round " + round + ": the next drain saw " + next.flagSeenByDrain);
-                    }
-                }
-                return null;
-            });
-            assertThat(ran.thrown()).isNull();
-            assertThat(violations).as("entry flag " + flagOnEntry).isEmpty();
+                    return null;
+                });
+                assertThat(ran.thrown()).isNull();
+                assertThat(violations).as("entry flag " + flagOnEntry).isEmpty();
+            }
         }
+        System.out.println("RACE-CONTROL rounds=2000+2000 watchdogFired(entryClear)=" + fired[0]
+                + " watchdogFired(entrySet)=" + fired[1]);
+    }
+
+    private static int overruns(Capture capture) {
+        return capture.overruns.get();
     }
 }

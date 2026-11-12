@@ -377,7 +377,7 @@ class IdentityCompositionDrainBudgetTest {
     }
 
     @Test
-    @DisplayName("When a drain that does not watch its deadline uses up the budget, the later drains are skipped and logged by class, the overrun is logged once, and every terminate runs")
+    @DisplayName("When a drain that does not watch its deadline uses up the budget, the later drains are skipped and logged by class, the overrun is logged once, every terminate runs without seeing the interrupt, and the caller gets it set")
     void exhaustedBudgetSkipsTheRest() throws Exception {
         Fixture fixture = new Fixture();
         fixture.cap("D").onDrain = () -> spinFor(Duration.ofMillis(900));
@@ -392,7 +392,8 @@ class IdentityCompositionDrainBudgetTest {
             for (Class<?> type : List.of(CapD.class, CapC.class, CapB.class, CapA.class)) {
                 assertThat(warnings.stream().filter(w -> w.contains(type.getName()))).as(type.getSimpleName()).hasSize(1);
             }
-            assertThat(ran.flagAfter()).isFalse();
+            fixture.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as(cap.name).containsExactly(false));
+            assertThat(ran.flagAfter()).as("the watchdog's interrupt the drain left set is kept for the caller").isTrue();
         }
     }
 
@@ -534,7 +535,7 @@ class IdentityCompositionDrainBudgetTest {
     }
 
     @Test
-    @DisplayName("A drain that returns as the watchdog fires, 2000 times over: the thread is left without a stray interrupt, and the next drain and every terminate see none")
+    @DisplayName("A drain that returns as the watchdog fires, 2000 times over: the next drain and every terminate see no interrupt, and the caller has it set when the watchdog fired and a drain that never reads the flag ended with it, and clear otherwise")
     void raceWithNoFlagOnEntry() throws Exception {
         List<String> violations = Collections.synchronizedList(new ArrayList<>());
         Ran ran = onThread(false, () -> {
@@ -557,10 +558,17 @@ class IdentityCompositionDrainBudgetTest {
                         }
                     }
                 };
-                fixture.composition.stop(Duration.ofMillis(3));
-                if (Thread.currentThread().isInterrupted()) {
-                    violations.add("round " + round + ": stray interrupt left on the caller");
-                    Thread.interrupted();
+                boolean fired;
+                try (Capture capture = new Capture()) {
+                    fixture.composition.stop(Duration.ofMillis(3));
+                    fired = capture.warningTexts().stream().anyMatch(w -> w.contains("overran"));
+                }
+                boolean flagAfter = Thread.interrupted();
+                if (!fired && flagAfter) {
+                    violations.add("round " + round + ": stray interrupt left on the caller, no watchdog fired");
+                }
+                if (fired && spin && !flagAfter) {
+                    violations.add("round " + round + ": the interrupt a spinning drain ended with was not kept");
                 }
                 for (Cap cap : fixture.caps) {
                     // A later drain's own watchdog may fire inside a slice of a few microseconds, so only a
@@ -808,7 +816,8 @@ class IdentityCompositionDrainBudgetTest {
 
             assertThat(stopping.isAlive()).isFalse();
             assertThat(TimeUnit.NANOSECONDS.toMillis((Long) box[1] - released)).isLessThan(2_000);
-            assertThat(box[0]).as("the flag after").isEqualTo(false);
+            assertThat(box[0]).as("the flag after: the interrupt the drain ignored is kept for the caller").isEqualTo(true);
+            fixture.caps.forEach(cap -> assertThat(cap.flagSeenByTerminate).as(cap.name).containsExactly(false));
             assertThat(fixture.entries("drain")).containsExactly("drain:D", "drain:C");
             assertThat(fixture.entries("terminate")).containsExactlyElementsOf(TERMINATES);
         } finally {
