@@ -253,6 +253,12 @@ public final class IdentitySkuApplication {
     private static final class Outcome {
         private boolean serving;
         private Throwable failure;
+        /**
+         * Whether the thread's interrupt flag was clear when a stop or a start's unwind that may overrun a
+         * drain began, so that a flag set when it returns may be the composition's own deferred one and is
+         * not a request to stop.
+         */
+        private boolean flagMayBeDeferred;
     }
 
     private static Ending run(StartupPlan plan) {
@@ -289,7 +295,7 @@ public final class IdentitySkuApplication {
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Exception e) {
-            if (causedByInterrupt(e)) {
+            if (!outcome.flagMayBeDeferred && causedByInterrupt(e)) {
                 LOG.log(System.Logger.Level.INFO, "Asked to stop while the kernel booted, nothing was started");
                 return Ending.STOPPED;
             }
@@ -357,7 +363,10 @@ public final class IdentitySkuApplication {
                                 // Asked to stop while a host part ran: refuse the start through the stop.
                                 reportStopFailure(stop.stop(), outcome);
                             }
-                            if (!built.tryStart()) {
+                            outcome.flagMayBeDeferred = !interrupted();
+                            boolean started = built.tryStart();
+                            outcome.flagMayBeDeferred = false;
+                            if (!started) {
                                 // A stop won between the admission and the start: nothing is started.
                                 return;
                             }
@@ -380,10 +389,11 @@ public final class IdentitySkuApplication {
                         throw fatal;
                     } catch (Exception | Error e) {
                         // A refusal of the interrupt by a step that waits is a stop, not a failure.
-                        if (!causedByInterrupt(e)) {
+                        if (outcome.flagMayBeDeferred || !causedByInterrupt(e)) {
                             outcome.failure = e;
                         }
                     } finally {
+                        outcome.flagMayBeDeferred = !interrupted();
                         reportStopFailure(stop.stop(), outcome);
                     }
                 });
