@@ -32,9 +32,21 @@ final class LauncherLog {
                     String... foreign) {
         Object[] arguments = new Object[foreign.length];
         for (int i = 0; i < foreign.length; i++) {
-            arguments[i] = LogRedaction.of(foreign[i], secrets);
+            arguments[i] = redacted(foreign[i], secrets);
         }
         logger.log(level, format, arguments);
+    }
+
+    /**
+     * Text that did not originate in the launcher, with the secrets withheld. The one route to the
+     * redaction: {@link #log} and the rewriting of other loggers' records use it.
+     *
+     * @param text    the foreign text; null is {@code (no message)}
+     * @param secrets the values that must never appear
+     * @return the text safe to write
+     */
+    static String redacted(String text, String... secrets) {
+        return LogRedaction.of(text, secrets);
     }
 
     /**

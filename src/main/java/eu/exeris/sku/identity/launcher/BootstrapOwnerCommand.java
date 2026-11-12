@@ -66,6 +66,7 @@ final class BootstrapOwnerCommand {
                 settings = BootstrapOwnerSettings.read(in, plan.hasMembershipDirectory());
                 if (settings != null) {
                     password = PasswordFile.read(settings.passwordFile(), plan.config().credentials().password(), in);
+                    ForeignLogs.learn(password);
                 }
                 if (!in.problems().isEmpty()) {
                     throw new IdentityConfigException(new ArrayList<>(in.problems()));

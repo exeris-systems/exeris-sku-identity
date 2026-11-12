@@ -27,7 +27,7 @@ An unquoted value after a password name is the hard case. A password can hold bl
 
 A URL does not pay the cost. The password of an authority ends at the `@` that closes it, and the password of a query ends at the next `&`, `;` or white space, because those characters are not part of a URL's value. A URL therefore keeps its host, port, database and parameters, which is what an operator needs to see in a connection failure.
 
-The same reasoning decides what the launcher redacts. Every text it did not write itself is passed through the redaction with the secrets configured for the command, because a driver can quote the connection URL it was given and a configuration message can quote a value. The launcher's own constant lines and the class names it logs for failures whose message is not ours to print do not carry such text and are logged directly.
+The same reasoning decides what the launcher redacts. Every text it did not write itself is passed through the redaction with the secrets configured for the command, because a driver can quote the connection URL it was given and a configuration message can quote a value. A driver also logs before any exception exists, through the JVM's logging, so the launcher rewrites the records of every logger it does not own the same way, and hands the driver only a URL it has parsed itself. The launcher's own constant lines and the class names it logs for failures whose message is not ours to print do not carry such text and are logged directly.
 
 ## Why the stop notice bypasses the logging framework
 

@@ -121,6 +121,7 @@ public final class IdentitySkuApplication {
 
     /** Applies the schema; returns the process exit status. */
     static int migrate(Map<String, String> environment) {
+        ForeignLogs.begin(secrets(environment));
         try {
             List<String> applied = Migrate.run(environment);
             LOG.log(System.Logger.Level.INFO, applied.isEmpty()
@@ -140,6 +141,7 @@ public final class IdentitySkuApplication {
 
     /** Creates the first verified account; returns the process exit status. */
     static int bootstrapOwner(Map<String, String> environment) {
+        ForeignLogs.begin(LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX));
         return completing(() -> BootstrapOwnerCommand.run(environment),
                 "The owner bootstrap did not complete, nothing was created ({0})");
     }
@@ -176,6 +178,7 @@ public final class IdentitySkuApplication {
      * the kernel all refuse to run on an interrupted thread, and that refusal is not a failure of the service.
      */
     static int serve(Map<String, String> environment) {
+        ForeignLogs.begin(LauncherLog.secrets(environment, StartupPlan.DATABASE_PREFIX));
         if (interrupted()) {
             LOG.log(System.Logger.Level.INFO, "Asked to stop before starting, nothing was started");
             return exitStatus(Ending.STOPPED);
