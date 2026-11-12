@@ -520,7 +520,7 @@ public record IdentityConfig(
         try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             properties.load(reader);
         } catch (IOException | RuntimeException e) {
-            throw new IdentityConfigException(CONFIG_FILE_KEY + " names a file that cannot be read: " + path);
+            throw new IdentityConfigException(CONFIG_FILE_KEY + " names a file that cannot be read.");
         }
         Map<String, String> values = new LinkedHashMap<>();
         List<String> unknown = new ArrayList<>();
@@ -633,8 +633,17 @@ public record IdentityConfig(
                 problem("set either " + inlineKey + " or " + fileKey + ", not both");
             } else if (!inline && file.isEmpty()) {
                 problem(inlineKey + " or " + fileKey + " is required: " + what + " has no default");
-            } else if (!file.isEmpty() && !(Files.isRegularFile(Path.of(file)) && Files.isReadable(Path.of(file)))) {
-                problem(fileKey + " names a file that cannot be read: " + file);
+            } else if (!file.isEmpty() && !readable(file)) {
+                problem(fileKey + " names a file that cannot be read.");
+            }
+        }
+
+        private static boolean readable(String file) {
+            try {
+                Path path = Path.of(file);
+                return Files.isRegularFile(path) && Files.isReadable(path);
+            } catch (RuntimeException invalid) {
+                return false;
             }
         }
 
