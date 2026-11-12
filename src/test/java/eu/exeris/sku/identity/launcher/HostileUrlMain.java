@@ -86,7 +86,7 @@ public final class HostileUrlMain {
         List<Driver> registered = Collections.list(DriverManager.getDrivers());
         Driver real = null;
         for (Driver driver : registered) {
-            if (driver.getClass().getName().equals("org.postgresql.Driver")) {
+            if (driver instanceof org.postgresql.Driver) {
                 real = driver;
             }
             DriverManager.deregisterDriver(driver);
