@@ -248,7 +248,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public java.util.logging.Level getLevel() {
+        public synchronized java.util.logging.Level getLevel() {
             return wrapped.getLevel();
         }
 
@@ -258,7 +258,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public java.util.logging.Filter getFilter() {
+        public synchronized java.util.logging.Filter getFilter() {
             return wrapped.getFilter();
         }
 
@@ -268,7 +268,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public java.util.logging.Formatter getFormatter() {
+        public synchronized java.util.logging.Formatter getFormatter() {
             return wrapped.getFormatter();
         }
 
@@ -278,7 +278,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public String getEncoding() {
+        public synchronized String getEncoding() {
             return wrapped.getEncoding();
         }
 
@@ -288,7 +288,7 @@ final class ForeignLogs {
         }
 
         @Override
-        public java.util.logging.ErrorManager getErrorManager() {
+        public synchronized java.util.logging.ErrorManager getErrorManager() {
             return wrapped.getErrorManager();
         }
     }
