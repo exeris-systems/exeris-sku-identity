@@ -315,7 +315,7 @@ public record IdentityConfig(
         Map<String, String> values = new LinkedHashMap<>();
         String file = environment.get(CONFIG_FILE_KEY);
         if (file != null && !file.isBlank()) {
-            values.putAll(readFile(Path.of(file.trim())));
+            values.putAll(readFile(file.trim()));
         }
         for (Map.Entry<String, String> entry : environment.entrySet()) {
             if (FILE_KEYS.contains(entry.getKey()) && entry.getValue() != null && !entry.getValue().isBlank()) {
@@ -376,7 +376,7 @@ public record IdentityConfig(
         try {
             return TokenIssuerConfig.fromEnvironment(in.subset(TOKEN_ISSUER_PREFIX));
         } catch (TokenIssuerConfigurationException e) {
-            in.problem(e.getMessage());
+            in.problem("token issuer settings are not usable: " + in.namesIn(e.getMessage(), TOKEN_ISSUER_KEYS));
             return null;
         }
     }
@@ -422,8 +422,8 @@ public record IdentityConfig(
         try {
             RateLimitFilterSettings.fromProperties(rateLimitProperties(rateLimit));
         } catch (IllegalStateException | IllegalArgumentException e) {
-            in.problem("rate limiting: " + e.getMessage() + " (" + RATELIMIT_TRUSTED_PROXIES + ", "
-                    + RATELIMIT_FORWARDED_HEADER + ")");
+            in.problem("rate limiting is not usable: check " + RATELIMIT_TRUSTED_PROXIES + " and "
+                    + RATELIMIT_FORWARDED_HEADER);
         }
         return rateLimit;
     }
@@ -442,7 +442,8 @@ public record IdentityConfig(
         try {
             lockout = new LockoutPolicy((int) attempts, Duration.ofSeconds(window), Duration.ofSeconds(lock));
         } catch (IllegalArgumentException e) {
-            in.problem("credential lockout: " + e.getMessage());
+            in.problem("credential lockout is not usable: check " + LOCKOUT_MAX_ATTEMPTS + ", "
+                    + LOCKOUT_FAILURE_WINDOW_SECONDS + " and " + LOCKOUT_DURATION_SECONDS);
         }
 
         TokenPolicy token = null;
@@ -456,7 +457,8 @@ public record IdentityConfig(
             token = new TokenPolicy(Duration.ofSeconds(verification), Duration.ofSeconds(reset),
                     Duration.ofSeconds(cooldown));
         } catch (IllegalArgumentException e) {
-            in.problem("credential tokens: " + e.getMessage());
+            in.problem("credential token validity is not usable: check " + TOKEN_VERIFICATION_VALIDITY_SECONDS
+                    + ", " + TOKEN_RESET_VALIDITY_SECONDS + " and " + TOKEN_ISSUE_COOLDOWN_SECONDS);
         }
 
         PasswordPolicy password = null;
@@ -465,8 +467,8 @@ public record IdentityConfig(
         try {
             password = new PasswordPolicy((int) min, (int) max);
         } catch (IllegalArgumentException e) {
-            in.problem("password length: " + e.getMessage() + " (" + PASSWORD_MIN_LENGTH + ", "
-                    + PASSWORD_MAX_LENGTH + ")");
+            in.problem("password length is not usable: check " + PASSWORD_MIN_LENGTH + " and "
+                    + PASSWORD_MAX_LENGTH);
         }
         return new Credentials(lockout, token, password);
     }
@@ -479,7 +481,8 @@ public record IdentityConfig(
         try {
             return new PasswordEncoderConfig(memory, iterations, parallelism, d.hashLength());
         } catch (IllegalArgumentException e) {
-            in.problem("password hashing: " + e.getMessage());
+            in.problem("password hashing is not usable: check " + ARGON2_MEMORY_KIB + ", " + ARGON2_ITERATIONS
+                    + " and " + ARGON2_PARALLELISM);
             return null;
         }
     }
@@ -515,29 +518,65 @@ public record IdentityConfig(
         return Set.copyOf(keys);
     }
 
-    private static Map<String, String> readFile(Path path) {
-        Properties properties = new Properties();
-        try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-            properties.load(reader);
+    /** A setting name as the file may carry it: the product prefix and then capitals, digits and underscores. */
+    private static final java.util.regex.Pattern SETTING_NAME = java.util.regex.Pattern.compile(
+            "EXERIS_[A-Z0-9_]{0,80}");
+
+    /**
+     * Reads the settings of the file named by {@value #CONFIG_FILE_KEY}. A message about the file names that
+     * setting and a line number; it never quotes the path, a line or a key that is not a known setting name,
+     * because an operator may have pasted a secret in place of any of them.
+     */
+    private static Map<String, String> readFile(String named) {
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(Path.of(named), StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException e) {
-            throw new IdentityConfigException(CONFIG_FILE_KEY + " names a file that cannot be read: " + path);
+            throw new IdentityConfigException(CONFIG_FILE_KEY + " names a file that cannot be read.");
         }
         Map<String, String> values = new LinkedHashMap<>();
         List<String> unknown = new ArrayList<>();
-        for (String key : new TreeSet<>(properties.stringPropertyNames())) {
-            if (!FILE_KEYS.contains(key)) {
-                unknown.add(path + " carries an unknown setting: " + key);
+        for (int i = 0; i < lines.size(); i++) {
+            int first = i + 1;
+            StringBuilder logical = new StringBuilder(lines.get(i));
+            boolean comment = lines.get(i).stripLeading().startsWith("#") || lines.get(i).stripLeading().startsWith("!");
+            while (!comment && continues(logical) && i + 1 < lines.size()) {
+                logical.setLength(logical.length() - 1);
+                logical.append(lines.get(++i).stripLeading());
+            }
+            Properties one = new Properties();
+            try {
+                one.load(new java.io.StringReader(logical.toString()));
+            } catch (IOException | RuntimeException e) {
+                unknown.add(CONFIG_FILE_KEY + " line " + first + " is not a valid line of a properties file.");
                 continue;
             }
-            String value = properties.getProperty(key).trim();
-            if (!value.isEmpty()) {
-                values.put(key, value);
+            for (String key : one.stringPropertyNames()) {
+                if (!FILE_KEYS.contains(key)) {
+                    unknown.add(SETTING_NAME.matcher(key).matches()
+                            ? CONFIG_FILE_KEY + " line " + first + " carries an unknown setting: " + key
+                            : CONFIG_FILE_KEY + " line " + first + " is not a setting.");
+                    continue;
+                }
+                String value = one.getProperty(key).trim();
+                if (!value.isEmpty()) {
+                    values.put(key, value);
+                }
             }
         }
         if (!unknown.isEmpty()) {
             throw new IdentityConfigException(unknown);
         }
         return values;
+    }
+
+    /** Whether a physical line ends in an odd number of backslashes, which joins it to the next one. */
+    private static boolean continues(CharSequence line) {
+        int backslashes = 0;
+        for (int i = line.length() - 1; i >= 0 && line.charAt(i) == '\\'; i--) {
+            backslashes++;
+        }
+        return backslashes % 2 == 1;
     }
 
     /** Typed access to the merged settings; every error is recorded against its setting, none is thrown. */
@@ -551,6 +590,16 @@ public record IdentityConfig(
 
         void problem(String text) {
             problems.add(text);
+        }
+
+        /**
+         * The setting names among {@code known} that a foreign message mentions, in name order. Only names
+         * the configuration itself declares are returned, so nothing else the message holds is repeated.
+         */
+        String namesIn(String message, Set<String> known) {
+            List<String> found = new TreeSet<>(known).stream()
+                    .filter(name -> message != null && message.contains(name)).toList();
+            return found.isEmpty() ? String.join(", ", new TreeSet<>(known)) : String.join(", ", found);
         }
 
         void fail() {
@@ -593,11 +642,11 @@ public record IdentityConfig(
             try {
                 parsed = Long.parseLong(value.trim());
             } catch (NumberFormatException e) {
-                problem(key + " must be a whole number, not '" + value + "'");
+                problem(key + " must be a whole number");
                 return fallback;
             }
             if (parsed < min || parsed > max) {
-                problem(key + " must be between " + min + " and " + max + ", not " + parsed);
+                problem(key + " must be between " + min + " and " + max);
                 return fallback;
             }
             return parsed;
@@ -620,7 +669,7 @@ public record IdentityConfig(
                 }
                 return parsed;
             } catch (DateTimeParseException e) {
-                problem(key + " must be an ISO-8601 duration such as PT5M, not '" + value + "'");
+                problem(key + " must be an ISO-8601 duration such as PT5M");
                 return fallback;
             }
         }
@@ -633,15 +682,26 @@ public record IdentityConfig(
                 problem("set either " + inlineKey + " or " + fileKey + ", not both");
             } else if (!inline && file.isEmpty()) {
                 problem(inlineKey + " or " + fileKey + " is required: " + what + " has no default");
-            } else if (!file.isEmpty() && !(Files.isRegularFile(Path.of(file)) && Files.isReadable(Path.of(file)))) {
-                problem(fileKey + " names a file that cannot be read: " + file);
+            } else if (!file.isEmpty() && !readable(file)) {
+                problem(fileKey + " names a file that cannot be read.");
+            }
+        }
+
+        private static boolean readable(String file) {
+            try {
+                Path path = Path.of(file);
+                return Files.isRegularFile(path) && Files.isReadable(path);
+            } catch (RuntimeException invalid) {
+                return false;
             }
         }
 
         /** Browser origins: {@code scheme://host[:port]} with an http or https scheme, no path, never a wildcard. */
         List<String> origins(String key) {
             List<String> origins = new ArrayList<>();
+            int position = 0;
             for (String origin : list(key)) {
+                position++;
                 if (origin.equals("*")) {
                     problem(key + " must list origins; a wildcard is refused");
                     continue;
@@ -650,14 +710,14 @@ public record IdentityConfig(
                 try {
                     uri = new URI(origin);
                 } catch (URISyntaxException e) {
-                    problem(key + ": '" + origin + "' is not a URI");
+                    problem(key + ": entry " + position + " is not a URI");
                     continue;
                 }
                 String scheme = uri.getScheme();
                 boolean plain = uri.getHost() != null && uri.getUserInfo() == null && uri.getQuery() == null
                         && uri.getFragment() == null && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
                 if (!plain || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
-                    problem(key + ": '" + origin + "' is not an origin (http:// or https://, host and optional "
+                    problem(key + ": entry " + position + " is not an origin (http:// or https://, host and optional "
                             + "port, nothing else)");
                     continue;
                 }

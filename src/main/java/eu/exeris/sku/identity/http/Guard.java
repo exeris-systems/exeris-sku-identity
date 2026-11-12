@@ -41,8 +41,19 @@ final class Guard {
         } catch (IllegalArgumentException e) {
             responses.problem(exchange, Problem.INVALID_REQUEST);
         } catch (RuntimeException e) {
-            LOG.log(System.Logger.Level.ERROR, "request failed", e);
+            // A failure's message and stack are not ours to print: a driver's message can quote the
+            // connection URL. The classes name what failed.
+            LOG.log(System.Logger.Level.ERROR, "request failed ({0}, root cause {1})", e.getClass().getName(),
+                    rootCause(e).getClass().getName());
             responses.problem(exchange, Problem.INTERNAL_ERROR);
         }
+    }
+
+    private static Throwable rootCause(Throwable failure) {
+        Throwable root = failure;
+        for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < 32; depth++) {
+            root = root.getCause();
+        }
+        return root;
     }
 }

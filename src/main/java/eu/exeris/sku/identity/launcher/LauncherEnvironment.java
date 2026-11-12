@@ -1,7 +1,6 @@
 package eu.exeris.sku.identity.launcher;
 
-import java.io.IOException;
-import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,26 +67,24 @@ final class LauncherEnvironment {
             problems.add("One of " + key + " and " + key + "_FILE must be set.");
             return null;
         }
-        Path path = Path.of(file);
-        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+        Path path;
+        try {
+            path = Path.of(file);
+        } catch (InvalidPathException e) {
             problems.add(key + "_FILE does not name a readable file.");
             return null;
         }
-        try {
-            String content = Files.readString(path);
-            int end = content.length();
-            while (end > 0 && (content.charAt(end - 1) == '\n' || content.charAt(end - 1) == '\r')) {
-                end--;
-            }
-            if (end == 0) {
-                problems.add(key + "_FILE names an empty file.");
-                return null;
-            }
-            return content.substring(0, end);
-        } catch (IOException e) {
-            problems.add(key + "_FILE cannot be read.");
-            return null;
+        SecretFile.Read read = SecretFile.read(path);
+        if (read.refusal() == null) {
+            return read.content();
         }
+        problems.add(switch (read.refusal()) {
+            case NOT_READABLE -> key + "_FILE does not name a readable file.";
+            case TOO_LARGE -> key + "_FILE names a file larger than " + SecretFile.MAXIMUM_BYTES + " bytes.";
+            case EMPTY -> key + "_FILE names an empty file.";
+            case UNREADABLE -> key + "_FILE cannot be read.";
+        });
+        return null;
     }
 
     /** An integer within bounds; the default when unset. A bad value is recorded and the default returned. */
