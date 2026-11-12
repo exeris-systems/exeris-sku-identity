@@ -66,6 +66,8 @@ public final class IdentitySkuApplication {
     public static final int EXIT_MIGRATION_FAILED = 1;
 
     private static final System.Logger LOG = System.getLogger(IdentitySkuApplication.class.getName());
+    /** The text of the line that reports a failed stop; the exception's class name follows, never its message. */
+    private static final String STOP_FAILED = "Stopping Identity failed";
     private static final Duration DRAIN = Duration.ofSeconds(15);
     private static final List<String> SUBSYSTEMS = List.of("http", "transport", "persistence", "scheduling");
 
@@ -265,10 +267,16 @@ public final class IdentitySkuApplication {
         // for only when the callback's thread is already stopping it, and releases the latch, which is all
         // the callback is waiting for. Its notice goes straight to the standard error: the logging
         // framework's own shutdown hook runs at the same time as this one and removes the log handlers, so a
-        // record published from here can be dropped, while nothing closes the standard error stream.
+        // record published from here can be dropped, while nothing closes the standard error stream. The
+        // failure of the stop goes the same way, for the same reason. The stop returns its failure to the
+        // one caller that performed it, so the line is written by the hook when the hook performed the stop
+        // and by the callback's thread (reportStopFailure) when that thread did: once, never twice.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.err.println("Shutdown signal received, draining");
-            stop.stop();
+            Throwable stopFailure = stop.stop();
+            if (stopFailure != null) {
+                System.err.println(STOP_FAILED + " (" + stopFailure.getClass().getName() + ")");
+            }
             shutdown.countDown();
         }, "identity-shutdown"));
 
@@ -417,7 +425,7 @@ public final class IdentitySkuApplication {
 
     private static void reportStopFailure(Throwable stopFailure, Outcome outcome) {
         if (stopFailure != null) {
-            LOG.log(System.Logger.Level.ERROR, "Stopping Identity failed ({0})", stopFailure.getClass().getName());
+            LOG.log(System.Logger.Level.ERROR, STOP_FAILED + " ({0})", stopFailure.getClass().getName());
             if (outcome.failure == null) {
                 outcome.failure = stopFailure;
             }
