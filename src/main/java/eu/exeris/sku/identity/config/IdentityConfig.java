@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /**
  * The identity service's runtime configuration, read from environment variables and an optional
@@ -315,7 +314,7 @@ public record IdentityConfig(
         Map<String, String> values = new LinkedHashMap<>();
         String file = environment.get(CONFIG_FILE_KEY);
         if (file != null && !file.isBlank()) {
-            values.putAll(readFile(Path.of(file.trim())));
+            values.putAll(readFile(file.trim()));
         }
         for (Map.Entry<String, String> entry : environment.entrySet()) {
             if (FILE_KEYS.contains(entry.getKey()) && entry.getValue() != null && !entry.getValue().isBlank()) {
@@ -515,29 +514,65 @@ public record IdentityConfig(
         return Set.copyOf(keys);
     }
 
-    private static Map<String, String> readFile(Path path) {
-        Properties properties = new Properties();
-        try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-            properties.load(reader);
+    /** A setting name as the file may carry it: the product prefix and then capitals, digits and underscores. */
+    private static final java.util.regex.Pattern SETTING_NAME = java.util.regex.Pattern.compile(
+            "EXERIS_[A-Z0-9_]{0,80}");
+
+    /**
+     * Reads the settings of the file named by {@value #CONFIG_FILE_KEY}. A message about the file names that
+     * setting and a line number; it never quotes the path, a line or a key that is not a known setting name,
+     * because an operator may have pasted a secret in place of any of them.
+     */
+    private static Map<String, String> readFile(String named) {
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(Path.of(named), StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException e) {
             throw new IdentityConfigException(CONFIG_FILE_KEY + " names a file that cannot be read.");
         }
         Map<String, String> values = new LinkedHashMap<>();
         List<String> unknown = new ArrayList<>();
-        for (String key : new TreeSet<>(properties.stringPropertyNames())) {
-            if (!FILE_KEYS.contains(key)) {
-                unknown.add(path + " carries an unknown setting: " + key);
+        for (int i = 0; i < lines.size(); i++) {
+            int first = i + 1;
+            StringBuilder logical = new StringBuilder(lines.get(i));
+            boolean comment = lines.get(i).stripLeading().startsWith("#") || lines.get(i).stripLeading().startsWith("!");
+            while (!comment && continues(logical) && i + 1 < lines.size()) {
+                logical.setLength(logical.length() - 1);
+                logical.append(lines.get(++i).stripLeading());
+            }
+            Properties one = new Properties();
+            try {
+                one.load(new java.io.StringReader(logical.toString()));
+            } catch (IOException | RuntimeException e) {
+                unknown.add(CONFIG_FILE_KEY + " line " + first + " is not a valid line of a properties file.");
                 continue;
             }
-            String value = properties.getProperty(key).trim();
-            if (!value.isEmpty()) {
-                values.put(key, value);
+            for (String key : one.stringPropertyNames()) {
+                if (!FILE_KEYS.contains(key)) {
+                    unknown.add(SETTING_NAME.matcher(key).matches()
+                            ? CONFIG_FILE_KEY + " line " + first + " carries an unknown setting: " + key
+                            : CONFIG_FILE_KEY + " line " + first + " is not a setting.");
+                    continue;
+                }
+                String value = one.getProperty(key).trim();
+                if (!value.isEmpty()) {
+                    values.put(key, value);
+                }
             }
         }
         if (!unknown.isEmpty()) {
             throw new IdentityConfigException(unknown);
         }
         return values;
+    }
+
+    /** Whether a physical line ends in an odd number of backslashes, which joins it to the next one. */
+    private static boolean continues(CharSequence line) {
+        int backslashes = 0;
+        for (int i = line.length() - 1; i >= 0 && line.charAt(i) == '\\'; i--) {
+            backslashes++;
+        }
+        return backslashes % 2 == 1;
     }
 
     /** Typed access to the merged settings; every error is recorded against its setting, none is thrown. */
