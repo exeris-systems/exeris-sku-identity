@@ -1,6 +1,7 @@
 package eu.exeris.sku.identity.launcher;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.BitSet;
 import java.util.LinkedHashSet;
@@ -141,7 +142,10 @@ import java.util.Set;
  *       bounded number of secrets: every scan is a single left-to-right pass with no backtracking.</li>
  *   <li>Every occurrence of a configured secret of at least {@link #MINIMUM_SECRET_LENGTH} characters in the
  *       input, in the forms above, is withheld, whatever the order of the secrets and whatever the structure
- *       stage decided.</li>
+ *       stage decided. A placeholder already present in the input ({@link #WITHHELD} or
+ *       {@code (message withheld)}) is an opaque token and is left intact: a secret that occurs only inside
+ *       such a token is not an occurrence, and an occurrence that reaches out of one is withheld outside
+ *       it.</li>
  *   <li>A secret shorter than {@link #MINIMUM_SECRET_LENGTH} is not replaced where it merely occurs: a one-
  *       or two-character secret would blank every such character of every message, and the result would no
  *       longer say what failed. It is still withheld wherever it is the value of a label or the password of an
@@ -209,6 +213,7 @@ final class LogRedaction {
             boolean[] byConfiguredSecret = new boolean[n];
             if (!configured.isEmpty()) {
                 markConfiguredSecrets(message, configured, byConfiguredSecret);
+                releasePlaceholders(message, byConfiguredSecret);
             }
             boolean[] withheld = byConfiguredSecret.clone();
             BitSet empty = new BitSet();
@@ -306,6 +311,20 @@ final class LogRedaction {
         for (int i = 0; i < length; i++) {
             covered += delta[i];
             byConfiguredSecret[i] = covered > 0;
+        }
+    }
+
+    /**
+     * Clears the marks inside a placeholder that is already present in the text. A placeholder is an opaque
+     * token: a configured secret that is a piece of it ({@code held} in {@code <withheld>}) occurs in the
+     * token, not in the text the token stands for, and marking it would cut the token open. A secret
+     * occurrence that reaches out of a placeholder keeps its marks outside it.
+     */
+    private static void releasePlaceholders(String text, boolean[] marked) {
+        for (String token : List.of(WITHHELD, UNREADABLE)) {
+            for (int at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + token.length())) {
+                Arrays.fill(marked, at, at + token.length(), false);
+            }
         }
     }
 
