@@ -139,6 +139,8 @@ public final class IdentityComposition {
      * <p>The drains of the unwind share one budget of {@value #START_FAILURE_DRAIN_SECONDS} seconds, with the
      * semantics of {@link #stop(Duration)}: a drain that overruns it is interrupted and abandoned, and the
      * terminations always follow.
+     * The calling thread's interrupt flag follows the rule stated for {@link #stop(Duration)}, with the
+     * start of the unwind in place of the start of the stop.
      *
      * <p>The unwind follows the capability lifecycle contract. When {@code initialize} fails at capability
      * <i>k</i>, the capabilities that completed it are drained in reverse order, <i>k</i> is not drained
@@ -254,16 +256,27 @@ public final class IdentityComposition {
      * interrupted, not killed: a drain that ignores the interrupt keeps the stop until it returns, and is
      * never running when its capability's {@code terminate} is called.
      *
-     * <p>Interrupts. An interrupt the watchdog delivered is never visible to a later drain or to any terminate
-     * of this stop. A stop request of another source is never lost: when the calling thread's interrupt flag
-     * was set on entry, or was set when the watchdog fired, or is set at the end of a drain whose watchdog
-     * fired, the flag is set when {@code stop} returns, whether it returns normally or throws. The last case
-     * cannot be told from the watchdog's own interrupt, which a drain may have ignored or restored, and is
-     * resolved toward keeping the request: after a stop in which a capability's drain overran its slice and
-     * ended with the interrupt flag set, the caller gets the flag set on return although no other source may
-     * have interrupted it. A caller must treat an interrupt after such a stop as a request to stop, which it
-     * has just carried out. When no watchdog fired, the flag is not touched, except that a flag set on entry
-     * stays visible to every drain and terminate.
+     * <p>Interrupts. While no watchdog has fired, the composition never writes the calling thread's interrupt
+     * flag during the stop: it neither clears nor sets it, and whatever a drain or a terminate does to the
+     * flag stays as that capability left it for the ones that follow. A flag set on entry is therefore
+     * visible to the drains and terminates only for as long as none of them consumes it and no watchdog
+     * fires; the composition does not set it again between capabilities. When a drain's watchdog fired, the
+     * flag is read and cleared in one step at the end of that drain and stays clear for every later drain and
+     * every terminate, so that the watchdog's interrupt reaches none of them.
+     *
+     * <p>On return from {@code stop}, whether it returns normally or throws, the flag is set if it was set
+     * when the stop began (read once, on entry), or was set when a watchdog fired, or was set at the end of a
+     * drain whose watchdog fired. Otherwise the composition leaves the flag as the capabilities left it. The
+     * last of the three cases cannot be told from the watchdog's own interrupt, which a drain may have
+     * ignored or restored, and is resolved toward keeping the request: after a stop in which a capability's
+     * drain overran its slice and ended with the interrupt flag set, the caller gets the flag set on return
+     * although no other source may have interrupted it. A caller must treat an interrupt after such a stop as
+     * a request to stop, which it has just carried out.
+     *
+     * <p>A stop request that arrives during the stop and is consumed by a capability itself before the end of
+     * its drain (its blocking call throws {@link InterruptedException}, or it calls
+     * {@link Thread#interrupted()}), or by a terminate, is not restored. The requests that are kept are
+     * exactly the three above.
      *
      * @param drainTimeout the time all the capabilities together may take to drain in-flight work; a
      *        negative duration, of whatever size, is a budget that is already used up
@@ -302,10 +315,10 @@ public final class IdentityComposition {
      * the capability.
      *
      * <p>A drain runs on the calling thread, which keeps the bindings the thread carries, and a watchdog
-     * interrupts that thread at the deadline. After a drain whose watchdog fired the thread's flag is clear,
-     * so that no watchdog interrupt reaches the next drain or any terminate, and the interrupt that may be
-     * another source's is recorded in {@code debt}, to be set again when the stop or the unwind returns;
-     * {@link #drainWithin} states the rule.
+     * interrupts that thread at the deadline. While no watchdog has fired the flag is not written. After a
+     * drain whose watchdog fired the thread's flag is clear, so that no watchdog interrupt reaches the next
+     * drain or any terminate, and the interrupt that may be another source's is recorded in {@code debt}, to
+     * be set again when the stop or the unwind returns; {@link #drainWithin} states the rule.
      *
      * @return the first {@link Error} a drain threw, with the later ones suppressed; {@code null} when
      *         there was none. An {@link Exception} is logged and goes no further.
@@ -366,13 +379,13 @@ public final class IdentityComposition {
      * what was read or arrives after it and stays set. What a drain did with its flag cannot say whose a flag
      * set at the end is, so the rule does not guess:
      * <ul>
-     * <li>the watchdog did not fire: the flag is untouched, except that a flag the thread entered with is set
-     *     again if the drain cleared it, so that it stays visible to the next drain and to the terminates;
+     * <li>the watchdog did not fire: the flag is not written, so it is as the drain left it;
      * <li>the watchdog fired: the flag is clear on return, so that the watchdog's interrupt reaches neither
      *     the next drain nor a terminate, and an interrupt is recorded in {@code debt} as owed to the caller
-     *     of the stop when the flag was set on entry, was set when the watchdog fired, or is set at the end
-     *     of the drain. The last case includes the watchdog's own interrupt that the drain ignored or
-     *     restored; it is kept rather than lost.
+     *     of the stop when the flag was set when the watchdog fired or is set at the end of the drain. The
+     *     last case includes the watchdog's own interrupt that the drain ignored or restored; it is kept
+     *     rather than lost. A flag set when the stop began is owed through the {@code debt} that the stop
+     *     created with it, not through this method.
      * </ul>
      *
      * @param debt where the interrupt owed to the caller of the stop is recorded; this method never sets it
@@ -384,7 +397,6 @@ public final class IdentityComposition {
     private static boolean drainWithin(CapabilityLifecycleHooks module, Duration remaining, InterruptDebt debt)
             throws Exception {
         Thread caller = Thread.currentThread();
-        boolean flagOnEntry = caller.isInterrupted();
         WatchdogGate gate = new WatchdogGate();
         Thread watchdog = new Thread(() -> {
             try {
@@ -415,19 +427,18 @@ public final class IdentityComposition {
             }
             watchdog.interrupt();
             if (end.fired()) {
-                if (flagOnEntry || end.flagBeforeFire() || end.flagAtEnd()) {
+                if (end.flagBeforeFire() || end.flagAtEnd()) {
                     debt.owe();
                 }
-            } else if (flagOnEntry) {
-                caller.interrupt();
             }
         }
         return !end.fired();
     }
 
     /**
-     * An interrupt that belongs to the caller of a stop or of a start's unwind, kept off the thread while the
-     * stop runs and set on it by {@link #settle()} when the stop returns.
+     * An interrupt that belongs to the caller of a stop or of a start's unwind: one that was set when the stop
+     * or the unwind began, or that a drain's watchdog took off the thread. It is set on the thread by
+     * {@link #settle()} when the stop or the unwind returns.
      */
     private static final class InterruptDebt {
         private boolean owed;

@@ -814,11 +814,6 @@ class IdentityCompositionInterruptRuleTest {
     // ---- 4: no watchdog fires, an interrupt that arrives between drains ----------------------------------------
 
     @Test
-    @KnownDefect("expected: when no watchdog fires the flag is not touched, and a drain that consumes an interrupt"
-            + " leaves it consumed; actual: a flag set by a third party during an earlier drain is 'on entry' to the"
-            + " next drain, which consumes it, and the composition sets it again, so the later drains and the"
-            + " terminates see it and it is set on return (IdentityComposition.java:421, 'else if (flagOnEntry)"
-            + " caller.interrupt()', where flagOnEntry is read at the start of each drain, not of the stop)")
     @DisplayName("4. A third party interrupts during one drain and the next drain consumes it, no watchdog fires: it stays consumed for the later drains, the terminates and the caller")
     void aDrainThatConsumesAnInterruptOfAnEarlierDrainLeavesItConsumed() throws Exception {
         Fixture fixture = new Fixture();
