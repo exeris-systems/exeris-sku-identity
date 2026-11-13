@@ -1275,7 +1275,9 @@ class IdentityCompositionInterruptOwnershipTest {
 
         assertThat(ran.thrown()).isNull();
         assertThat(violations).isEmpty();
-        assertThat(fired[0]).as("rounds in which the watchdog fired").isBetween(rounds / 20, rounds - rounds / 20);
+        // Both outcomes must occur for the race to have been exercised. How often each occurs depends on how late
+        // the scheduler runs the watchdog, so no share of the rounds is required.
+        assertThat(fired[0]).as("rounds in which the watchdog fired").isBetween(1, rounds - 1);
         awaitNoWatchdog();
         System.out.println("GATE-STRESS rounds=" + rounds + " watchdogFired=" + fired[0]);
     }
